@@ -832,16 +832,21 @@ def main(stdscr):
 # 入口
 # ═══════════════════════════════════════════════════════════════════════
 
-if __name__ == "__main__":
+def cli():
+    """Command-line entrypoint for the terminal dino game."""
     print("=" * 50)
     print("  🦕 Terminal Dino Runner")
     print("=" * 50)
     print()
     print("  用法:")
-    print("    python dino_game.py          手动玩")
-    print("    python dino_game.py --agent  AI Agent 玩")
-    print("    python dino_game.py --llm    Claude LLM 玩")
+    print("    trex          手动玩")
+    print("    trex --agent  AI Agent 玩")
+    print("    trex --llm    Claude LLM 玩")
     print()
     print("  启动中...")
     time.sleep(0.5)
     curses.wrapper(main)    # wrapper 自动处理 curses 初始化和清理
+
+
+if __name__ == "__main__":
+    cli()
