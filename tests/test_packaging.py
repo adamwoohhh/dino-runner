@@ -66,6 +66,63 @@ class GameTuningTest(unittest.TestCase):
         self.assertEqual(agent.decide(state), "jump")
 
 
+class CollisionTest(unittest.TestCase):
+    def test_low_bird_collides_with_standing_dino(self):
+        dino_game = importlib.import_module("dino_game")
+        game = dino_game.DinoGame()
+        game.spawn_timer = 9999
+        game.obstacles = [
+            dino_game.Obstacle("bird", dino_game.DINO_COL + 4, height=0)
+        ]
+
+        game.update()
+
+        self.assertTrue(game.game_over)
+
+    def test_mid_bird_collides_with_standing_dino_head(self):
+        dino_game = importlib.import_module("dino_game")
+        game = dino_game.DinoGame()
+        game.spawn_timer = 9999
+        game.obstacles = [
+            dino_game.Obstacle("bird", dino_game.DINO_COL + 4, height=4)
+        ]
+
+        game.update()
+
+        self.assertTrue(game.game_over)
+
+    def test_mid_bird_does_not_collide_with_ducking_dino(self):
+        dino_game = importlib.import_module("dino_game")
+        game = dino_game.DinoGame()
+        game.spawn_timer = 9999
+        game.duck(True)
+        game.obstacles = [
+            dino_game.Obstacle("bird", dino_game.DINO_COL + 4, height=4)
+        ]
+
+        game.update()
+
+        self.assertFalse(game.game_over)
+
+    def test_rule_agent_ducks_under_mid_bird(self):
+        dino_game = importlib.import_module("dino_game")
+        agent = dino_game.RuleAgent()
+        state = {
+            "dino_y": 0.0,
+            "jumping": False,
+            "speed": dino_game.INITIAL_SPEED,
+            "obstacles": [{
+                "kind": "bird",
+                "distance": 19.0,
+                "height": 4,
+                "width": 4,
+                "h": 2,
+            }],
+        }
+
+        self.assertEqual(agent.decide(state), "duck")
+
+
 class ManualInputTest(unittest.TestCase):
     def test_down_key_latches_ducking_across_empty_frames(self):
         dino_game = importlib.import_module("dino_game")
@@ -82,6 +139,19 @@ class ManualInputTest(unittest.TestCase):
         self.assertTrue(input_state.should_duck(dino_game.curses.KEY_DOWN))
         self.assertFalse(input_state.should_duck(ord(" ")))
         self.assertFalse(input_state.should_duck(-1))
+
+
+class GameOverFlowTest(unittest.TestCase):
+    def test_agent_mode_does_not_auto_reset_after_game_over(self):
+        dino_game = importlib.import_module("dino_game")
+
+        self.assertFalse(dino_game.should_reset_after_game_over(-1, agent_active=True))
+
+    def test_r_key_resets_after_game_over(self):
+        dino_game = importlib.import_module("dino_game")
+
+        self.assertTrue(dino_game.should_reset_after_game_over(ord("r"), agent_active=True))
+        self.assertTrue(dino_game.should_reset_after_game_over(ord("R"), agent_active=False))
 
 
 if __name__ == "__main__":

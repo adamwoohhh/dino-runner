@@ -205,7 +205,12 @@ class Obstacle:
         left = self.x
         right = self.x + self.width - 1
         bottom = self.height
-        top = self.height + self.h - 1
+        if self.kind == "bird":
+            if self.height == 0:
+                bottom = 2
+            elif self.height == 4:
+                bottom = 3
+        top = bottom + self.h - 1
         return (left, right, bottom, top)
 
 
@@ -451,9 +456,12 @@ class RuleAgent:
             if dist > react_max or dist < react_min:
                 continue
 
-            # 中高空鸟 (height >= 4) — 恐龙站立高度碰不到，忽略
-            if obs["kind"] == "bird" and obs["height"] >= 4:
-                continue
+            if obs["kind"] == "bird":
+                # 中空鸟会撞到站立恐龙头部，蹲下躲避；高空鸟忽略
+                if obs["height"] == 4:
+                    return "duck"
+                if obs["height"] >= 8:
+                    continue
 
             # 低空鸟 或 任何仙人掌 — 必须跳！
             if on_ground:
@@ -596,6 +604,11 @@ class ManualInputState:
             self.ducking = False
 
         return self.ducking
+
+
+def should_reset_after_game_over(key: int, agent_active: bool = False) -> bool:
+    """Game Over 后只允许玩家显式按 R 重开。"""
+    return key == ord('r') or key == ord('R')
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -822,11 +835,7 @@ def main(stdscr):
 
         # ── Game Over 状态 ──
         if game.game_over:
-            if key == ord('r') or key == ord('R'):
-                game.reset()
-            elif agent:
-                # Agent 模式自动重来（短暂停顿让人看到分数）
-                time.sleep(0.5)
+            if should_reset_after_game_over(key, agent_active=bool(agent)):
                 game.reset()
             renderer.draw(game, agent_name)
             continue
