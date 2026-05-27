@@ -24,6 +24,9 @@ check: test
 run:
 	$(TREX)
 
+compete:
+	$(TREX) compete
+
 agent:
 	$(TREX) --agent
 

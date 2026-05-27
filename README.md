@@ -31,6 +31,9 @@ make llm
 
 # 选择历史运行记录并重放
 .venv/bin/trex replay
+
+# 选择历史运行记录并进入竞技模式
+.venv/bin/trex compete
 ```
 
 也可以直接使用底层命令：
@@ -40,14 +43,18 @@ make llm
 .venv/bin/trex --agent
 .venv/bin/trex --llm
 .venv/bin/trex replay
+.venv/bin/trex compete
 .venv/bin/trex --record run.json
 .venv/bin/trex --replay run.json
+.venv/bin/trex --compete run.json
 python3 dino_game.py
 python3 dino_game.py --agent
 python3 dino_game.py --llm
 python3 dino_game.py replay
+python3 dino_game.py compete
 python3 dino_game.py --record run.json
 python3 dino_game.py --replay run.json
+python3 dino_game.py --compete run.json
 ```
 
 ## 模式
@@ -58,8 +65,10 @@ python3 dino_game.py --replay run.json
 | `trex --agent` | 使用本地规则 Agent 自动决策 | 无 |
 | `trex --llm` | 使用 Claude API 决策 | `ANTHROPIC_API_KEY` |
 | `trex replay` | 从历史运行记录列表选择并重放 | `replays/*.json` |
+| `trex compete` | 从历史运行记录列表选择一局并进入双赛道竞技 | `replays/*.json` |
 | `trex --record run.json` | 指定录制文件路径 | 无 |
 | `trex --replay run.json` | 直接从指定文件重放 | 对应 replay 文件 |
+| `trex --compete run.json` | 直接使用指定 replay 进入竞技模式 | 对应 replay 文件 |
 
 如果 `trex --llm` 没有检测到 `ANTHROPIC_API_KEY`，游戏会降级为规则 Agent。
 
@@ -68,6 +77,8 @@ python3 dino_game.py --replay run.json
 或 `llm`。Replay 文件是 JSON，包含随机种子、运行模式、总帧数、`actions` 和 `obstacles`；
 两组数据都使用 `{"frame": number, "action": ...}` 结构，`actions` 不记录 `none` 帧。重放时按记录数据推进游戏，不再依赖随机生成障碍物。
 每局只在 Game Over 时写入一个 replay 文件；同一进程内按 `R` 重开会为新局创建新文件。未结束时按 `Q` 或用 `Ctrl+C` 退出不会保存未完成的 replay。
+
+竞技模式会在同一屏幕渲染两条赛道：上方是源 replay 的历史记录，下方是玩家实时操作。两条赛道在源 replay 范围内使用相同的 seed 和障碍物数据；如果玩家超过源 replay 的帧数仍未结束，会继续用源 seed 实时生成障碍物。竞技结束后会写入新的 replay，并额外包含 `competitive: true` 和 `source_replay` 字段用于关联原始记录。
 
 ## 操控
 

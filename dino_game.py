@@ -22,8 +22,10 @@ Terminal Dino Runner — Chrome 断网小恐龙的终端版本
   python dino_game.py --agent    # 规则 AI Agent 自动玩
   python dino_game.py --llm      # Claude LLM Agent 玩 (需要 ANTHROPIC_API_KEY)
   python dino_game.py replay     # 从运行记录列表选择并重放
+  python dino_game.py compete    # 选择一条运行记录并进入竞技模式
   python dino_game.py --record run.json  # 指定录制文件
   python dino_game.py --replay run.json  # 重放一局
+  python dino_game.py --compete run.json # 直接竞技指定记录
 
 游戏内操控:
   SPACE / ↑  跳跃
@@ -188,12 +190,12 @@ def max_cactus_group_size(difficulty: float) -> int:
     return 4
 
 
-def generate_cactus_group(difficulty: float = 1.0) -> tuple[str, ...]:
+def generate_cactus_group(difficulty: float = 1.0, rng=random) -> tuple[str, ...]:
     """随机生成高/矮仙人掌组合，随难度逐步解锁 4 连。"""
     max_count = max_cactus_group_size(difficulty)
     while True:
-        count = random.randint(1, max_count)
-        plants = tuple(random.choice(("short", "tall")) for _ in range(count))
+        count = rng.randint(1, max_count)
+        plants = tuple(rng.choice(("short", "tall")) for _ in range(count))
         if count >= 3 and plants.count("tall") > 1:
             continue
         if plants != ("tall", "tall", "tall", "tall"):
@@ -238,14 +240,15 @@ class Obstacle:
             x: float,
             height: int = 0,
             plants: tuple[str, ...] | None = None,
-            difficulty: float = 1.0):
+            difficulty: float = 1.0,
+            rng=random):
         self.kind = kind
         self.x = float(x)
         self.height = height
         self.plants = plants
         if kind == "cactus_group":
             if plants is None:
-                plants = generate_cactus_group(difficulty)
+                plants = generate_cactus_group(difficulty, rng=rng)
                 self.plants = plants
             self.art = compose_cactus_group_art(plants)
         else:
@@ -306,7 +309,8 @@ class DinoGame:
     不负责: 渲染（交给 Renderer）、决策（交给 Agent）
     """
 
-    def __init__(self):
+    def __init__(self, rng=None):
+        self.rng = rng if rng is not None else random
         self.reset()
 
     def reset(self):
@@ -322,7 +326,7 @@ class DinoGame:
         self.speed = INITIAL_SPEED
         self.game_over = False
         self.frame = 0          # 帧计数器（用于动画切换）
-        self.spawn_timer = random.randint(SPAWN_MIN, SPAWN_MAX)
+        self.spawn_timer = self.rng.randint(SPAWN_MIN, SPAWN_MAX)
         self.ground_offset = 0  # 地面纹理滚动偏移（视觉效果）
 
     def jump(self):
@@ -442,13 +446,13 @@ class DinoGame:
             if self.spawn_timer <= 0:
                 obstacle = self._spawn_obstacle()
                 spawned_obstacles.append(obstacle)
-                self.spawn_timer = random.randint(SPAWN_MIN, SPAWN_MAX)
+                self.spawn_timer = self.rng.randint(SPAWN_MIN, SPAWN_MAX)
 
         # ── 4. 装饰: 云朵 ──
-        if random.random() < 0.02:          # 2% 概率每帧生成一朵云
+        if self.rng.random() < 0.02:        # 2% 概率每帧生成一朵云
             self.clouds.append({
                 "x": 82.0,
-                "y": random.randint(2, 8),  # 云在屏幕上方随机行
+                "y": self.rng.randint(2, 8),  # 云在屏幕上方随机行
             })
         for c in self.clouds:
             c["x"] -= self.speed * 0.3      # 云移动速度 = 30% 障碍物速度（视差效果）
@@ -494,16 +498,22 @@ class DinoGame:
         else:
             kinds = ["cactus_group", "cactus_group", "cactus_group", "bird", "bird"]
 
-        kind = random.choice(kinds)
+        kind = self.rng.choice(kinds)
         height = 0
         if kind == "bird":
             # 鸟有三种飞行高度:
             #   0 = 贴地（必须跳过）
             #   4 = 中空（站着就能过，也可蹲）
             #   8 = 高空（完全不用管）
-            height = random.choice([0, 4, 8])
+            height = self.rng.choice([0, 4, 8])
 
-        obstacle = Obstacle(kind, 82, height, difficulty=difficulty_for_score(self.score))
+        obstacle = Obstacle(
+            kind,
+            82,
+            height,
+            difficulty=difficulty_for_score(self.score),
+            rng=self.rng,
+        )
         self.obstacles.append(obstacle)
         return obstacle
 
@@ -717,11 +727,32 @@ def load_replay_file(path) -> dict:
 
 def game_mode_from_args(args: list[str]) -> str:
     """根据命令行参数返回运行模式名。"""
+    if is_competition_mode(args):
+        return "competitive"
     if "--llm" in args:
         return "llm"
     if "--agent" in args:
         return "agent"
     return "manual"
+
+
+def is_competition_mode(args: list[str]) -> bool:
+    """判断命令行参数是否请求竞技模式。"""
+    return (bool(args) and args[0] == "compete") or "--compete" in args
+
+
+def competition_source_path(args: list[str]) -> str | None:
+    """从竞技模式参数中读取源 replay 路径；缺省时由 UI 菜单选择。"""
+    if "--compete" in args:
+        index = args.index("--compete")
+        if index + 1 < len(args) and not args[index + 1].startswith("-"):
+            return args[index + 1]
+        return None
+    if args and args[0] == "compete":
+        if len(args) > 1 and not args[1].startswith("-"):
+            return args[1]
+        return arg_value(args, "--replay")
+    return None
 
 
 def default_replay_path(mode: str, seed: int | None = None, directory: str = REPLAY_DIR) -> str:
@@ -861,10 +892,18 @@ def obstacle_from_action_data(data: dict) -> Obstacle:
 class ReplayRecorder:
     """把一局游戏的随机种子、逐帧动作和障碍物事件写入文件。"""
 
-    def __init__(self, path, seed: int, mode: str = "manual"):
+    def __init__(
+            self,
+            path,
+            seed: int,
+            mode: str = "manual",
+            competitive: bool = False,
+            source_replay: str | None = None):
         self.path = path
         self.seed = seed
         self.mode = mode
+        self.competitive = competitive
+        self.source_replay = source_replay
         self.actions: list[dict] = []
         self.obstacles: list[dict] = []
         self.frames = 0
@@ -904,6 +943,9 @@ class ReplayRecorder:
             "actions": self.actions,
             "obstacles": self.obstacles,
         }
+        if self.competitive:
+            data["competitive"] = True
+            data["source_replay"] = self.source_replay
         directory = os.path.dirname(os.fspath(self.path))
         if directory:
             os.makedirs(directory, exist_ok=True)
@@ -1009,6 +1051,72 @@ class ReplayPlayer:
         return action
 
 
+class CompetitionRun:
+    """协调竞技模式中的历史赛道和玩家赛道。"""
+
+    def __init__(
+            self,
+            replay_player: ReplayPlayer,
+            source_replay: str,
+            record_path):
+        self.replay_player = replay_player
+        self.source_replay = os.fspath(source_replay)
+        self.history_game = DinoGame(rng=random.Random(replay_player.seed))
+        self.player_game = DinoGame(rng=random.Random(replay_player.seed))
+        self.recorder = ReplayRecorder(
+            record_path,
+            seed=replay_player.seed,
+            mode="competitive",
+            competitive=True,
+            source_replay=self.source_replay,
+        )
+        self.frame = 0
+        self.history_finished = replay_player.max_frame <= 0
+        self.player_finished = False
+
+    @property
+    def finished(self) -> bool:
+        return self.history_finished and self.player_finished
+
+    def step(self, player_action: str):
+        """推进竞技模式一帧。
+
+        源 replay 范围内两条赛道使用同一组障碍物；玩家超过源 replay
+        帧数后继续用源 seed 对玩家赛道实时生成新障碍物。
+        """
+        self.frame += 1
+
+        if not self.history_finished:
+            if self.replay_player.has_frame(self.frame):
+                history_action = self.replay_player.action_for_frame(self.frame)
+                apply_game_action(self.history_game, history_action)
+                self.history_game.update(
+                    replay_obstacles=self.replay_player.obstacles_for_frame(self.frame),
+                )
+            self.history_finished = (
+                self.history_game.game_over
+                or self.frame >= self.replay_player.max_frame
+            )
+
+        if self.player_game.game_over:
+            self.player_finished = True
+        elif not self.player_finished:
+            apply_game_action(self.player_game, player_action)
+            self.recorder.record_action(self.frame, player_action)
+            if self.replay_player.has_frame(self.frame):
+                spawned_obstacles = self.player_game.update(
+                    replay_obstacles=self.replay_player.obstacles_for_frame(self.frame),
+                )
+            else:
+                spawned_obstacles = self.player_game.update()
+            for obstacle in spawned_obstacles:
+                self.recorder.record_obstacle(self.frame, obstacle)
+            self.player_finished = self.player_game.game_over
+
+        if self.finished:
+            finish_recording(self.recorder)
+
+
 def apply_game_action(game: DinoGame, action: str):
     """执行 replay/agent/manual 统一动作。"""
     if action == "jump":
@@ -1022,8 +1130,7 @@ def apply_game_action(game: DinoGame, action: str):
 
 def run_replay_simulation(seed: int, actions: list[str]) -> dict:
     """无 UI 重放，用于测试 replay 是否确定性。"""
-    random.seed(seed)
-    game = DinoGame()
+    game = DinoGame(rng=random.Random(seed))
     for action in actions:
         if game.game_over:
             if action == "reset":
@@ -1057,8 +1164,7 @@ def start_recording_run(
     """启动一局新游戏，并为这一局创建独立 replay recorder。"""
     if seed is None:
         seed = time.time_ns()
-    random.seed(seed)
-    game = DinoGame()
+    game = DinoGame(rng=random.Random(seed))
     path = record_path_for_run(record_path, mode, seed, run_index, directory)
     return game, ReplayRecorder(path, seed, mode=mode)
 
@@ -1071,6 +1177,8 @@ def finish_recording(recorder: ReplayRecorder | None):
 
 def footer_hint(agent_name: str, speed: float) -> str:
     """根据当前模式返回底部操作提示。"""
+    if agent_name == "Competition":
+        return f"SPACE/↑ 跳跃 | ↓ 蹲下 | Q 退出 | 竞技 | 速度 {speed:.1f}x"
     if agent_name == "Replay":
         return f"Q 退出 | 回放 | 速度 {speed:.1f}x"
     if agent_name:
@@ -1131,6 +1239,131 @@ class Renderer:
                 self.scr.addstr(y, x, text, attr)
             except curses.error:
                 pass                 # 忽略右下角写入异常
+
+    def draw_competition_lane(
+            self,
+            game: DinoGame,
+            label: str,
+            ground_row: int,
+            dino_color_pair: int,
+            status: str):
+        """绘制竞技模式中的单条赛道。"""
+        h, w = self.scr.getmaxyx()
+        header_y = max(0, ground_row - 8)
+        self.safe_addstr(
+            header_y,
+            2,
+            f" {label} ",
+            curses.A_BOLD | curses.color_pair(dino_color_pair),
+        )
+        score_text = f"{status}  {game.score:05d}"
+        self.safe_addstr(
+            header_y,
+            max(2, w - len(score_text) - 2),
+            score_text,
+            curses.A_BOLD | curses.color_pair(3),
+        )
+
+        if game.ducking:
+            art = DINO_DUCK
+        elif game.jumping:
+            art = DINO_JUMP
+        elif (game.frame // RUN_ANIM_FRAME_INTERVAL) % 2 == 0:
+            art = DINO_RUN_1
+        else:
+            art = DINO_RUN_2
+
+        dino_screen_y = ground_row - len(art) - int(game.dino_y)
+        for i, line in enumerate(art):
+            self.safe_addstr(
+                dino_screen_y + i,
+                DINO_COL,
+                line,
+                curses.color_pair(dino_color_pair) | curses.A_BOLD,
+            )
+
+        for obs in game.obstacles:
+            ox = int(obs.x)
+            if obs.kind == "bird":
+                if (game.frame // BIRD_ANIM_FRAME_INTERVAL) % 2 == 0:
+                    obs_art = BIRD_1
+                else:
+                    obs_art = BIRD_2
+            else:
+                obs_art = obs.art
+
+            obs_screen_y = ground_row - len(obs_art) - obs.height
+            for i, line in enumerate(obs_art):
+                self.safe_addstr(
+                    obs_screen_y + i,
+                    ox,
+                    line,
+                    curses.color_pair(2) | curses.A_BOLD,
+                )
+
+        ground = ""
+        offset = int(game.ground_offset)
+        pattern = "▁▁▁▁▂▁▁▁▂▁▁▁▁▁▂▁▁▁"
+        while len(ground) < w:
+            ground += pattern
+        ground = ground[offset:offset + w - 1]
+        self.safe_addstr(ground_row, 0, ground, curses.color_pair(5) | curses.A_DIM)
+
+        if game.game_over:
+            self.safe_addstr(
+                max(header_y + 1, ground_row - 7),
+                2,
+                f"GAME OVER  Score: {game.score:05d}",
+                curses.A_BOLD | curses.color_pair(3),
+            )
+
+    def draw_competition(self, competition: CompetitionRun):
+        """绘制竞技模式的双赛道画面。"""
+        self.scr.erase()
+        h, w = self.scr.getmaxyx()
+
+        title = " DINO RUNNER [竞技模式] "
+        self.safe_addstr(0, 2, title, curses.A_BOLD | curses.color_pair(1))
+
+        top_ground = max(8, min(10, h // 2 - 2))
+        bottom_ground = min(h - 3, max(top_ground + 8, h - 3))
+        separator_y = min(h - 2, max(top_ground + 1, (top_ground + bottom_ground) // 2))
+        self.safe_addstr(separator_y, 0, "─" * max(0, w - 1), curses.A_DIM)
+
+        history_status = "撞毁" if competition.history_game.game_over else "结束"
+        if not competition.history_finished:
+            history_status = "回放"
+        player_status = "撞毁" if competition.player_game.game_over else "操作"
+        if competition.player_finished and not competition.player_game.game_over:
+            player_status = "结束"
+
+        self.draw_competition_lane(
+            competition.history_game,
+            "历史赛道",
+            top_ground,
+            6,
+            history_status,
+        )
+        self.draw_competition_lane(
+            competition.player_game,
+            "玩家赛道",
+            bottom_ground,
+            1,
+            player_status,
+        )
+
+        if competition.finished:
+            msg = "竞技结束  Q = 退出"
+            self.safe_addstr(
+                max(1, h // 2),
+                max(0, w // 2 - len(msg) // 2),
+                msg,
+                curses.A_BOLD | curses.color_pair(3),
+            )
+
+        hint = footer_hint("Competition", competition.player_game.speed)
+        self.safe_addstr(h - 1, 2, hint[:max(0, w - 4)], curses.A_DIM)
+        self.scr.refresh()
 
     def draw(self, game: DinoGame, agent_name: str):
         """绘制完整的一帧画面
@@ -1249,6 +1482,36 @@ class Renderer:
 # 主循环 — 把游戏引擎、渲染器、Agent 串起来
 # ═══════════════════════════════════════════════════════════════════════
 
+def manual_action_from_key(input_state: ManualInputState, key: int) -> str:
+    """把当前键盘输入转换为手动玩家动作，不直接修改游戏状态。"""
+    if key == ord(' ') or key == curses.KEY_UP:
+        input_state.should_duck(key)
+        return "jump"
+    ducking = input_state.should_duck(key)
+    return "duck" if ducking else "none"
+
+
+def run_competition_loop(stdscr, renderer: Renderer, competition: CompetitionRun):
+    """运行竞技模式主循环。"""
+    manual_input = ManualInputState()
+    renderer.draw_competition(competition)
+
+    while True:
+        key = stdscr.getch()
+        if key == ord('q') or key == ord('Q'):
+            break
+
+        if competition.finished:
+            renderer.draw_competition(competition)
+            continue
+
+        action = "none"
+        if not competition.player_finished:
+            action = manual_action_from_key(manual_input, key)
+        competition.step(action)
+        renderer.draw_competition(competition)
+
+
 def main(stdscr):
     """游戏主循环
 
@@ -1262,6 +1525,13 @@ def main(stdscr):
       7. 等待下一帧 (由 curses.timeout 控制)
     """
     args = sys.argv[1:]
+    competition_mode = is_competition_mode(args)
+    competition_path = competition_source_path(args)
+    if competition_mode and not competition_path:
+        competition_path = select_replay_file(stdscr, list_replay_files())
+        if not competition_path:
+            return
+
     replay_subcommand = bool(args) and args[0] == "replay"
     replay_path = arg_value(args, "--replay")
     if replay_subcommand and not replay_path:
@@ -1269,18 +1539,32 @@ def main(stdscr):
         if not replay_path:
             return
 
-    replay_player = ReplayPlayer.from_file(replay_path) if replay_path else None
+    renderer = Renderer(stdscr)
     record_path = arg_value(args, "--record")
+
+    if competition_mode:
+        replay_player = ReplayPlayer.from_file(competition_path)
+        competition_record_path = (
+            record_path
+            or default_replay_path("competitive", replay_player.seed)
+        )
+        competition = CompetitionRun(
+            replay_player,
+            source_replay=competition_path,
+            record_path=competition_record_path,
+        )
+        run_competition_loop(stdscr, renderer, competition)
+        return
+
+    replay_player = ReplayPlayer.from_file(replay_path) if replay_path else None
     mode = game_mode_from_args(args)
     run_index = 1
     if replay_player:
-        random.seed(replay_player.seed)
-        game = DinoGame()
+        game = DinoGame(rng=random.Random(replay_player.seed))
         recorder = None
     else:
         game, recorder = start_recording_run(mode, record_path, run_index)
 
-    renderer = Renderer(stdscr)
     manual_input = ManualInputState()
     event_frame = 0
 
@@ -1390,8 +1674,10 @@ def cli():
     print("    trex --agent  AI Agent 玩")
     print("    trex --llm    Claude LLM 玩")
     print("    trex replay   选择运行记录并重放")
+    print("    trex compete  选择运行记录并进入竞技模式")
     print("    trex --record run.json  指定录制文件")
     print("    trex --replay run.json  直接重放文件")
+    print("    trex --compete run.json  直接竞技指定记录")
     print()
     print("  启动中...")
     time.sleep(0.5)

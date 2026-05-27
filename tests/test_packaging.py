@@ -386,13 +386,17 @@ class RendererHintTest(unittest.TestCase):
         manual_hint = dino_game.footer_hint(agent_name="", speed=1.75)
         agent_hint = dino_game.footer_hint(agent_name="Rule Agent", speed=1.75)
         replay_hint = dino_game.footer_hint(agent_name="Replay", speed=1.75)
+        competition_hint = dino_game.footer_hint(agent_name="Competition", speed=1.75)
 
         self.assertNotIn("切换", manual_hint)
         self.assertNotIn("切换", agent_hint)
         self.assertNotIn("切换", replay_hint)
+        self.assertNotIn("切换", competition_hint)
         self.assertIn("Q 退出", manual_hint)
         self.assertIn("Q 退出", agent_hint)
         self.assertIn("Q 退出", replay_hint)
+        self.assertIn("Q 退出", competition_hint)
+        self.assertIn("竞技", competition_hint)
 
 
 class ReplayTest(unittest.TestCase):
@@ -433,6 +437,26 @@ class ReplayTest(unittest.TestCase):
                     },
                 },
             ])
+
+    def test_replay_recorder_writes_competition_metadata(self):
+        dino_game = importlib.import_module("dino_game")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = pathlib.Path(tmpdir) / "run.json"
+            recorder = dino_game.ReplayRecorder(
+                path,
+                seed=123,
+                mode="manual",
+                competitive=True,
+                source_replay="replays/source.json",
+            )
+
+            recorder.record_action(1, "jump")
+            recorder.save()
+
+            data = dino_game.load_replay_file(path)
+            self.assertTrue(data["competitive"])
+            self.assertEqual(data["source_replay"], "replays/source.json")
 
     def test_replay_player_returns_recorded_mode_actions_and_obstacles_by_frame(self):
         dino_game = importlib.import_module("dino_game")
@@ -619,6 +643,20 @@ class ReplayTest(unittest.TestCase):
         self.assertEqual(dino_game.game_mode_from_args([]), "manual")
         self.assertEqual(dino_game.game_mode_from_args(["--agent"]), "agent")
         self.assertEqual(dino_game.game_mode_from_args(["--llm"]), "llm")
+        self.assertEqual(dino_game.game_mode_from_args(["compete"]), "competitive")
+
+    def test_competition_source_path_accepts_flag_and_positional_arg(self):
+        dino_game = importlib.import_module("dino_game")
+
+        self.assertEqual(
+            dino_game.competition_source_path(["--compete", "run.json"]),
+            "run.json",
+        )
+        self.assertEqual(
+            dino_game.competition_source_path(["compete", "run.json"]),
+            "run.json",
+        )
+        self.assertIsNone(dino_game.competition_source_path(["compete"]))
 
     def test_replay_seed_and_actions_are_deterministic(self):
         dino_game = importlib.import_module("dino_game")
@@ -628,6 +666,102 @@ class ReplayTest(unittest.TestCase):
         second = dino_game.run_replay_simulation(seed=42, actions=actions)
 
         self.assertEqual(first, second)
+
+
+class CompetitionModeTest(unittest.TestCase):
+    def make_replay_player(self, *, frames=1, obstacles=None, actions=None):
+        dino_game = importlib.import_module("dino_game")
+        return dino_game.ReplayPlayer(
+            seed=99,
+            actions=actions or [],
+            obstacles=obstacles or [],
+            frames=frames,
+        )
+
+    def test_competition_run_feeds_source_obstacles_to_both_lanes(self):
+        dino_game = importlib.import_module("dino_game")
+        replay = self.make_replay_player(
+            frames=1,
+            obstacles=[{
+                "frame": 1,
+                "action": {
+                    "kind": "bird",
+                    "x": 82,
+                    "height": 4,
+                },
+            }],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            recorder_path = pathlib.Path(tmpdir) / "competition.json"
+            run = dino_game.CompetitionRun(
+                replay,
+                source_replay="replays/source.json",
+                record_path=recorder_path,
+            )
+
+            self.assertEqual(run.recorder.mode, "competitive")
+            run.step("jump")
+
+            self.assertEqual(run.history_game.obstacles[0].kind, "bird")
+            self.assertEqual(run.player_game.obstacles[0].kind, "bird")
+            self.assertEqual(run.recorder.actions, [
+                {"frame": 1, "action": {"value": "jump"}},
+            ])
+            self.assertEqual(run.recorder.obstacles, [{
+                "frame": 1,
+                "action": {
+                    "kind": "bird",
+                    "x": 82.0,
+                    "height": 4,
+                },
+            }])
+
+    def test_competition_run_uses_seeded_generation_after_source_frames(self):
+        dino_game = importlib.import_module("dino_game")
+        replay = self.make_replay_player(frames=0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            recorder_path = pathlib.Path(tmpdir) / "competition.json"
+            run = dino_game.CompetitionRun(
+                replay,
+                source_replay="replays/source.json",
+                record_path=recorder_path,
+            )
+            run.player_game.spawn_timer = 0
+
+            run.step("none")
+
+            self.assertEqual(len(run.recorder.obstacles), 1)
+            self.assertEqual(run.recorder.obstacles[0]["frame"], 1)
+
+    def test_competition_run_finishes_only_after_history_and_player_end(self):
+        dino_game = importlib.import_module("dino_game")
+        replay = self.make_replay_player(frames=1)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            recorder_path = pathlib.Path(tmpdir) / "competition.json"
+            run = dino_game.CompetitionRun(
+                replay,
+                source_replay="replays/source.json",
+                record_path=recorder_path,
+            )
+
+            run.step("none")
+
+            self.assertTrue(run.history_finished)
+            self.assertFalse(run.player_finished)
+            self.assertFalse(run.finished)
+
+            run.player_game.game_over = True
+            run.step("none")
+
+            self.assertTrue(run.player_finished)
+            self.assertTrue(run.finished)
+            data = dino_game.load_replay_file(recorder_path)
+            self.assertTrue(data["competitive"])
+            self.assertEqual(data["mode"], "competitive")
+            self.assertEqual(data["source_replay"], "replays/source.json")
 
 
 if __name__ == "__main__":
