@@ -141,7 +141,7 @@ state = game.get_state()
 
 ## Replay
 
-Replay 文件是 JSON，包含 `version`、`seed`、`mode` 和逐帧 `actions`。默认每次运行都会写入 `replays/`，文件名包含时间戳、`manual`/`agent`/`llm` 模式和 seed 后缀；也可以用 `--record run.json` 指定路径。录制时每次推进游戏帧都会写入 `jump`、`duck` 或 `none`；Game Over 后手动按 `R` 会记录 `reset`。`trex replay` 会先列出历史运行记录，方向键选择后回车进入重放；重放时先按 `seed` 初始化随机数，再逐帧喂回动作，因此不依赖实时键盘输入或 Agent 决策。
+Replay 文件是 JSON，包含 `version`、`seed`、`mode`、`frames`、`actions` 和 `obstacles`。默认每次运行都会写入 `replays/`，文件名包含时间戳、`manual`/`agent`/`llm` 模式和 seed 后缀；也可以用 `--record run.json` 指定路径。`actions` 和 `obstacles` 都保存为 `{"frame": number, "action": ActionData | ObstacleData}`，数组语义已经区分输入和障碍物，因此不再写 `type=input` 或 `type=obstacle`；`actions` 不记录 `none` 帧，空操作由缺省值表示，`frames` 保留总回放长度。Game Over 后手动按 `R` 会记录 `reset`。`trex replay` 会先列出历史运行记录，方向键选择后回车进入重放；重放时按文件里的障碍物数据注入障碍物，因此不依赖随机调用顺序。
 
 ## 物理参数
 

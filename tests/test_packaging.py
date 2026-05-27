@@ -379,38 +379,157 @@ class GameOverFlowTest(unittest.TestCase):
         self.assertTrue(dino_game.should_reset_after_game_over(ord("R"), agent_active=False))
 
 
+class RendererHintTest(unittest.TestCase):
+    def test_footer_hints_do_not_offer_runtime_mode_toggle(self):
+        dino_game = importlib.import_module("dino_game")
+
+        manual_hint = dino_game.footer_hint(agent_name="", speed=1.75)
+        agent_hint = dino_game.footer_hint(agent_name="Rule Agent", speed=1.75)
+        replay_hint = dino_game.footer_hint(agent_name="Replay", speed=1.75)
+
+        self.assertNotIn("切换", manual_hint)
+        self.assertNotIn("切换", agent_hint)
+        self.assertNotIn("切换", replay_hint)
+        self.assertIn("Q 退出", manual_hint)
+        self.assertIn("Q 退出", agent_hint)
+        self.assertIn("Q 退出", replay_hint)
+
+
 class ReplayTest(unittest.TestCase):
-    def test_replay_recorder_writes_seed_mode_and_actions(self):
+    def test_replay_recorder_writes_actions_and_obstacles_without_none_actions(self):
         dino_game = importlib.import_module("dino_game")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = pathlib.Path(tmpdir) / "run.json"
             recorder = dino_game.ReplayRecorder(path, seed=123, mode="agent")
-            recorder.record("none")
-            recorder.record("jump")
+            recorder.record_action(1, "none")
+            recorder.record_obstacle(
+                2,
+                dino_game.Obstacle(
+                    "cactus_group",
+                    82,
+                    plants=("short", "tall"),
+                ),
+            )
+            recorder.record_action(2, "jump")
             recorder.save()
 
             data = dino_game.load_replay_file(path)
             self.assertEqual(data["seed"], 123)
             self.assertEqual(data["mode"], "agent")
-            self.assertEqual(data["actions"], ["none", "jump"])
+            self.assertEqual(data["version"], 3)
+            self.assertEqual(data["frames"], 2)
+            self.assertEqual(data["actions"], [
+                {"frame": 2, "action": {"value": "jump"}},
+            ])
+            self.assertEqual(data["obstacles"], [
+                {
+                    "frame": 2,
+                    "action": {
+                        "kind": "cactus_group",
+                        "x": 82.0,
+                        "height": 0,
+                        "plants": ["short", "tall"],
+                    },
+                },
+            ])
 
-    def test_replay_player_returns_recorded_mode_and_actions_in_order(self):
+    def test_replay_player_returns_recorded_mode_actions_and_obstacles_by_frame(self):
         dino_game = importlib.import_module("dino_game")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = pathlib.Path(tmpdir) / "run.json"
             path.write_text(
-                '{"version": 1, "seed": 99, "mode": "llm", '
-                '"actions": ["jump", "none"]}'
+                '{"version": 3, "seed": 99, "mode": "llm", "frames": 3, '
+                '"actions": [{"frame": 1, "action": {"value": "jump"}}], '
+                '"obstacles": [{"frame": 2, "action": {"kind": "bird", '
+                '"x": 82, "height": 4}}]}'
             )
 
             player = dino_game.ReplayPlayer.from_file(path)
             self.assertEqual(player.seed, 99)
             self.assertEqual(player.mode, "llm")
+            self.assertEqual(player.action_for_frame(1), "jump")
+            self.assertEqual(player.action_for_frame(2), "none")
+            self.assertEqual(player.action_for_frame(3), "none")
+            self.assertEqual(player.obstacles_for_frame(2), [{
+                "kind": "bird",
+                "x": 82,
+                "height": 4,
+            }])
+            self.assertTrue(player.has_frame(3))
+            self.assertFalse(player.has_frame(4))
+
+    def test_replay_player_converts_legacy_events_to_actions_and_obstacles(self):
+        dino_game = importlib.import_module("dino_game")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = pathlib.Path(tmpdir) / "run.json"
+            path.write_text(
+                '{"version": 2, "seed": 99, "mode": "llm", "events": ['
+                '{"frame": 1, "action": {"type": "input", "value": "jump"}},'
+                '{"frame": 2, "action": {"type": "obstacle", "kind": "bird", '
+                '"x": 82, "height": 4}},'
+                '{"frame": 2, "action": {"type": "input", "value": "none"}}'
+                ']}'
+            )
+
+            player = dino_game.ReplayPlayer.from_file(path)
+
+            self.assertEqual(player.action_for_frame(1), "jump")
+            self.assertEqual(player.action_for_frame(2), "none")
+            self.assertEqual(player.obstacles_for_frame(2), [{
+                "kind": "bird",
+                "x": 82,
+                "height": 4,
+            }])
+
+    def test_replay_player_converts_legacy_actions_to_frame_events(self):
+        dino_game = importlib.import_module("dino_game")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = pathlib.Path(tmpdir) / "run.json"
+            path.write_text(
+                '{"version": 1, "seed": 99, "actions": ["jump", "none"]}'
+            )
+
+            player = dino_game.ReplayPlayer.from_file(path)
+
+            self.assertEqual(player.action_for_frame(1), "jump")
+            self.assertEqual(player.action_for_frame(2), "none")
             self.assertEqual(player.next_action(), "jump")
-            self.assertEqual(player.next_action(), "none")
             self.assertIsNone(player.next_action())
+
+    def test_obstacle_data_round_trips_to_obstacle(self):
+        dino_game = importlib.import_module("dino_game")
+        obstacle = dino_game.Obstacle(
+            "cactus_group",
+            82,
+            plants=("short", "tall"),
+        )
+
+        data = dino_game.obstacle_to_action_data(obstacle)
+        restored = dino_game.obstacle_from_action_data(data)
+
+        self.assertEqual(restored.kind, "cactus_group")
+        self.assertEqual(restored.x, 82)
+        self.assertEqual(restored.height, 0)
+        self.assertEqual(restored.plants, ("short", "tall"))
+
+    def test_game_update_uses_replay_obstacles_instead_of_random_spawn(self):
+        dino_game = importlib.import_module("dino_game")
+        game = dino_game.DinoGame()
+        game.spawn_timer = 0
+
+        spawned = game.update(replay_obstacles=[{
+            "kind": "bird",
+            "x": 82,
+            "height": 4,
+        }])
+
+        self.assertEqual(len(spawned), 1)
+        self.assertEqual(game.obstacles[0].kind, "bird")
+        self.assertEqual(game.obstacles[0].height, 4)
 
     def test_default_replay_path_uses_replay_directory_and_mode(self):
         dino_game = importlib.import_module("dino_game")

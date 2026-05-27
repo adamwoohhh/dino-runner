@@ -28,7 +28,6 @@ Terminal Dino Runner — Chrome 断网小恐龙的终端版本
 游戏内操控:
   SPACE / ↑  跳跃
   ↓          蹲下（地面）/ 快速下落（空中）
-  A          切换 人类 ↔ AI 模式
   R          Game Over 后重新开始
   Q          退出
 
@@ -393,7 +392,7 @@ class DinoGame:
             "obstacles": nearest,
         }
 
-    def update(self):
+    def update(self, replay_obstacles: list[dict] | None = None) -> list[Obstacle]:
         """推进一帧游戏逻辑 — 每帧调用一次
 
         执行顺序:
@@ -405,7 +404,9 @@ class DinoGame:
           6. 碰撞检测
         """
         if self.game_over:
-            return
+            return []
+
+        spawned_obstacles: list[Obstacle] = []
 
         self.frame += 1
         self.score += 1
@@ -430,11 +431,18 @@ class DinoGame:
         self.obstacles = [o for o in self.obstacles if o.x > -10]
 
         # ── 3. 生成新障碍物 ──
-        # spawn_timer 按速度递减，模拟「固定像素间距」
-        self.spawn_timer -= self.speed
-        if self.spawn_timer <= 0:
-            self._spawn_obstacle()
-            self.spawn_timer = random.randint(SPAWN_MIN, SPAWN_MAX)
+        if replay_obstacles is not None:
+            for obstacle_data in replay_obstacles:
+                obstacle = obstacle_from_action_data(obstacle_data)
+                self.obstacles.append(obstacle)
+                spawned_obstacles.append(obstacle)
+        else:
+            # spawn_timer 按速度递减，模拟「固定像素间距」
+            self.spawn_timer -= self.speed
+            if self.spawn_timer <= 0:
+                obstacle = self._spawn_obstacle()
+                spawned_obstacles.append(obstacle)
+                self.spawn_timer = random.randint(SPAWN_MIN, SPAWN_MAX)
 
         # ── 4. 装饰: 云朵 ──
         if random.random() < 0.02:          # 2% 概率每帧生成一朵云
@@ -469,7 +477,9 @@ class DinoGame:
             if self.game_over:
                 break
 
-    def _spawn_obstacle(self):
+        return spawned_obstacles
+
+    def _spawn_obstacle(self) -> Obstacle:
         """在屏幕右侧 (x=82) 生成一个新障碍物
 
         障碍物种类随分数推进:
@@ -493,9 +503,9 @@ class DinoGame:
             #   8 = 高空（完全不用管）
             height = random.choice([0, 4, 8])
 
-        self.obstacles.append(
-            Obstacle(kind, 82, height, difficulty=difficulty_for_score(self.score))
-        )
+        obstacle = Obstacle(kind, 82, height, difficulty=difficulty_for_score(self.score))
+        self.obstacles.append(obstacle)
+        return obstacle
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -808,24 +818,73 @@ def select_replay_file(stdscr, paths: list[str]) -> str | None:
         index = move_replay_selection(index, key, len(paths))
 
 
+def obstacle_to_action_data(obstacle: Obstacle) -> dict:
+    """把障碍物转换成 replay 记录中的 action 数据。"""
+    data = {
+        "kind": obstacle.kind,
+        "x": float(obstacle.x),
+        "height": obstacle.height,
+    }
+    if obstacle.kind == "cactus_group":
+        data["plants"] = list(obstacle.plants or ())
+    return data
+
+
+def obstacle_from_action_data(data: dict) -> Obstacle:
+    """从 replay 记录中的 action 数据还原障碍物。"""
+    plants = data.get("plants")
+    if plants is not None:
+        plants = tuple(plants)
+    return Obstacle(
+        data["kind"],
+        data.get("x", 82),
+        data.get("height", 0),
+        plants=plants,
+    )
+
+
 class ReplayRecorder:
-    """把一局游戏的随机种子和逐帧动作写入文件。"""
+    """把一局游戏的随机种子、逐帧动作和障碍物事件写入文件。"""
 
     def __init__(self, path, seed: int, mode: str = "manual"):
         self.path = path
         self.seed = seed
         self.mode = mode
-        self.actions: list[str] = []
+        self.actions: list[dict] = []
+        self.obstacles: list[dict] = []
+        self.frames = 0
+        self.input_count = 0
 
     def record(self, action: str):
-        self.actions.append(action)
+        self.record_action(self.input_count + 1, action)
+
+    def record_action(self, frame: int, action: str):
+        self.input_count += 1
+        self.frames = max(self.frames, frame)
+        if action == "none":
+            return
+        self.actions.append({
+            "frame": frame,
+            "action": {
+                "value": action,
+            },
+        })
+
+    def record_obstacle(self, frame: int, obstacle: Obstacle):
+        self.frames = max(self.frames, frame)
+        self.obstacles.append({
+            "frame": frame,
+            "action": obstacle_to_action_data(obstacle),
+        })
 
     def save(self):
         data = {
-            "version": 1,
+            "version": 3,
             "seed": self.seed,
             "mode": self.mode,
+            "frames": self.frames,
             "actions": self.actions,
+            "obstacles": self.obstacles,
         }
         directory = os.path.dirname(os.fspath(self.path))
         if directory:
@@ -835,22 +894,93 @@ class ReplayRecorder:
 
 
 class ReplayPlayer:
-    """按 replay 文件逐帧吐出动作。"""
+    """按 replay 文件逐帧吐出动作和障碍物。"""
 
-    def __init__(self, seed: int, actions: list[str], mode: str = "manual"):
+    def __init__(
+            self,
+            seed: int,
+            actions: list[dict],
+            obstacles: list[dict],
+            mode: str = "manual",
+            frames: int | None = None):
         self.seed = seed
-        self.actions = actions
         self.mode = mode
+        self.action_events = actions
+        self.obstacle_events = obstacles
+        self.actions = [
+            event.get("action", {}).get("value", event.get("action"))
+            for event in actions
+        ]
+        self.actions_by_frame = {
+            event["frame"]: event.get("action", {}).get("value", event.get("action"))
+            for event in actions
+        }
+        self.obstacles_by_frame: dict[int, list[dict]] = {}
+        for event in obstacles:
+            self.obstacles_by_frame.setdefault(event["frame"], []).append(event["action"])
+        last_action_frame = max((event["frame"] for event in actions), default=0)
+        last_obstacle_frame = max((event["frame"] for event in obstacles), default=0)
+        self.max_frame = max(frames or 0, last_action_frame, last_obstacle_frame)
         self.index = 0
 
     @classmethod
     def from_file(cls, path):
         data = load_replay_file(path)
+        actions = data.get("actions")
+        obstacles = data.get("obstacles", [])
+        frames = data.get("frames")
+
+        if data.get("events") is not None:
+            actions = []
+            obstacles = []
+            for event in data["events"]:
+                action = event.get("action", {})
+                if action.get("type") == "input":
+                    if action.get("value") != "none":
+                        actions.append({
+                            "frame": event["frame"],
+                            "action": {"value": action.get("value", "none")},
+                        })
+                elif action.get("type") == "obstacle":
+                    obstacle_action = dict(action)
+                    obstacle_action.pop("type", None)
+                    obstacles.append({
+                        "frame": event["frame"],
+                        "action": obstacle_action,
+                    })
+            frames = frames if frames is not None else max(
+                (event["frame"] for event in data["events"]),
+                default=0,
+            )
+        elif actions and all(isinstance(action, str) for action in actions):
+            actions = [
+                {
+                    "frame": index + 1,
+                    "action": {
+                        "value": action,
+                    },
+                }
+                for index, action in enumerate(actions)
+                if action != "none"
+            ]
+            frames = frames if frames is not None else len(data.get("actions", []))
+
         return cls(
             seed=data["seed"],
-            actions=list(data.get("actions", [])),
+            actions=list(actions or []),
+            obstacles=list(obstacles or []),
             mode=data.get("mode", "manual"),
+            frames=frames,
         )
+
+    def action_for_frame(self, frame: int) -> str:
+        return self.actions_by_frame.get(frame, "none")
+
+    def obstacles_for_frame(self, frame: int) -> list[dict]:
+        return list(self.obstacles_by_frame.get(frame, []))
+
+    def has_frame(self, frame: int) -> bool:
+        return frame <= self.max_frame
 
     def next_action(self) -> str | None:
         if self.index >= len(self.actions):
@@ -897,6 +1027,15 @@ def arg_value(args: list[str], flag: str) -> str | None:
     if index + 1 >= len(args):
         raise ValueError(f"{flag} 需要一个文件路径")
     return args[index + 1]
+
+
+def footer_hint(agent_name: str, speed: float) -> str:
+    """根据当前模式返回底部操作提示。"""
+    if agent_name == "Replay":
+        return f"Q 退出 | 回放 | 速度 {speed:.1f}x"
+    if agent_name:
+        return f"Q 退出 | 速度 {speed:.1f}x"
+    return "SPACE/↑ 跳跃 | ↓ 蹲下 | Q 退出"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1060,10 +1199,7 @@ class Renderer:
                                  curses.A_BOLD | curses.color_pair(3))
 
         # ── 底部操作提示 ──
-        if not agent_name:
-            hint = "SPACE/↑ 跳跃 | ↓ 蹲下 | A 切换AI | Q 退出"
-        else:
-            hint = f"A 切换手动 | Q 退出 | 速度 {game.speed:.1f}x"
+        hint = footer_hint(agent_name, game.speed)
         self.safe_addstr(h - 1, 2, hint, curses.A_DIM)
 
         self.scr.refresh()
@@ -1108,6 +1244,7 @@ def main(stdscr):
     game = DinoGame()
     renderer = Renderer(stdscr)
     manual_input = ManualInputState()
+    event_frame = 0
 
     # 根据命令行参数选择 Agent 模式
     agent = None
@@ -1135,37 +1272,34 @@ def main(stdscr):
             if key == ord('q') or key == ord('Q'):
                 break
 
-            # A 键随时切换 人类 ↔ AI 模式；Replay 模式不切换
-            if not replay_player and (key == ord('a') or key == ord('A')):
-                if agent:
-                    agent = None
-                    agent_name = ""
-                else:
-                    agent = RuleAgent()
-                    agent_name = "Rule Agent"
-
             # ── Game Over 状态 ──
             if game.game_over:
                 if replay_player:
-                    action = replay_player.next_action()
+                    event_frame += 1
+                    if not replay_player.has_frame(event_frame):
+                        renderer.draw(game, agent_name)
+                        continue
+                    action = replay_player.action_for_frame(event_frame)
                     if action == "reset":
                         game.reset()
                     renderer.draw(game, agent_name)
                     continue
 
                 if should_reset_after_game_over(key, agent_active=bool(agent)):
+                    event_frame += 1
                     game.reset()
                     if recorder:
-                        recorder.record("reset")
+                        recorder.record_action(event_frame, "reset")
                 renderer.draw(game, agent_name)
                 continue
 
             # ── 输入处理 ──
+            event_frame += 1
             if replay_player:
-                action = replay_player.next_action()
-                if action is None:
+                if not replay_player.has_frame(event_frame):
                     renderer.draw(game, agent_name)
                     continue
+                action = replay_player.action_for_frame(event_frame)
                 apply_game_action(game, action)
             elif agent:
                 # Agent 模式: 读取状态 → 决策 → 执行动作
@@ -1184,10 +1318,18 @@ def main(stdscr):
                     action = "duck" if ducking else "none"
 
             if recorder:
-                recorder.record(action)
+                recorder.record_action(event_frame, action)
 
             # ── 更新 & 渲染 ──
-            game.update()
+            if replay_player:
+                spawned_obstacles = game.update(
+                    replay_obstacles=replay_player.obstacles_for_frame(event_frame),
+                )
+            else:
+                spawned_obstacles = game.update()
+                if recorder:
+                    for obstacle in spawned_obstacles:
+                        recorder.record_obstacle(event_frame, obstacle)
             renderer.draw(game, agent_name)
     finally:
         if recorder:
