@@ -39,9 +39,9 @@ class PackagingTest(unittest.TestCase):
         makefile = (self.project_root() / "Makefile").read_text()
 
         self.assertIn("build:\n\trm -rf dist\n\t$(SYSTEM_PYTHON) -m build", makefile)
-        self.assertIn("check-dist:\n\t$(SYSTEM_PYTHON) -m twine check dist/*", makefile)
-        self.assertIn("publish-test: build check-dist", makefile)
-        self.assertIn("publish: build check-dist", makefile)
+        self.assertIn("check-dist: build\n\t$(SYSTEM_PYTHON) -m twine check dist/*", makefile)
+        self.assertIn("publish-test: check-dist", makefile)
+        self.assertIn("publish: check-dist", makefile)
 
 
 class GameTuningTest(unittest.TestCase):

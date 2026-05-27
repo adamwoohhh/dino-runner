@@ -25,13 +25,13 @@ build:
 	rm -rf dist
 	$(SYSTEM_PYTHON) -m build
 
-check-dist:
+check-dist: build
 	$(SYSTEM_PYTHON) -m twine check dist/*
 
-publish-test: build check-dist
+publish-test: check-dist
 	$(SYSTEM_PYTHON) -m twine upload --repository testpypi dist/*
 
-publish: build check-dist
+publish: check-dist
 	$(SYSTEM_PYTHON) -m twine upload dist/*
 
 run:
