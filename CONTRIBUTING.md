@@ -91,6 +91,8 @@ make publish-test
 make publish
 ```
 
+`make publish-test` 和 `make publish` 会重新构建发布包，并在上传前运行 `twine check`。
+
 发布前至少运行：
 
 ```bash

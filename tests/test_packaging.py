@@ -35,6 +35,14 @@ class PackagingTest(unittest.TestCase):
         self.assertIn("pip install ai-dino-in-terminal", readme)
         self.assertIn("dino", readme)
 
+    def test_makefile_publish_targets_build_and_check_fresh_artifacts(self):
+        makefile = (self.project_root() / "Makefile").read_text()
+
+        self.assertIn("build:\n\trm -rf dist\n\t$(SYSTEM_PYTHON) -m build", makefile)
+        self.assertIn("check-dist:\n\t$(SYSTEM_PYTHON) -m twine check dist/*", makefile)
+        self.assertIn("publish-test: build check-dist", makefile)
+        self.assertIn("publish: build check-dist", makefile)
+
 
 class GameTuningTest(unittest.TestCase):
     def test_jump_arc_returns_to_ground_in_chrome_like_window(self):

@@ -1,4 +1,4 @@
-.PHONY: venv install dev-install test check build publish-test publish run compete agent llm clean
+.PHONY: venv install dev-install test check build check-dist publish-test publish run compete agent llm clean
 
 SYSTEM_PYTHON ?= python3
 VENV ?= .venv
@@ -22,12 +22,16 @@ check: test
 	env PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m py_compile dino_game.py
 
 build:
+	rm -rf dist
 	$(SYSTEM_PYTHON) -m build
 
-publish-test:
+check-dist:
+	$(SYSTEM_PYTHON) -m twine check dist/*
+
+publish-test: build check-dist
 	$(SYSTEM_PYTHON) -m twine upload --repository testpypi dist/*
 
-publish:
+publish: build check-dist
 	$(SYSTEM_PYTHON) -m twine upload dist/*
 
 run:
