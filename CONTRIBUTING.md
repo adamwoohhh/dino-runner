@@ -46,6 +46,9 @@ make dev-install  # editable 安装，适合开发
 make run          # .venv/bin/trex
 make agent        # .venv/bin/trex --agent
 make llm          # .venv/bin/trex --llm
+.venv/bin/trex replay             # 选择运行记录并重放
+.venv/bin/trex --record run.json  # 指定 replay 录制路径
+.venv/bin/trex --replay run.json  # 直接重放 replay 文件
 make test         # 运行 unittest
 make check        # 测试 + py_compile
 make clean        # 清理缓存和构建产物
@@ -72,6 +75,7 @@ dino_game.py
 ├── DinoGame       游戏引擎、物理、碰撞、生成、状态导出
 ├── RuleAgent      基于距离阈值的规则 Agent
 ├── LLMAgent       Claude API Agent
+├── ReplayRecorder/ReplayPlayer
 ├── Renderer       curses 终端渲染器
 ├── main()         游戏主循环
 └── cli()          console script 入口
@@ -134,6 +138,10 @@ state = game.get_state()
 - 每帧消费上一次已返回的缓存动作。
 
 因此 LLM 模式用于演示“模型读取结构化状态并决策”，不是实时游戏的最佳策略。接口慢返回或失败时，游戏仍继续推进；失败动作会降级为 `none`。
+
+## Replay
+
+Replay 文件是 JSON，包含 `version`、`seed`、`mode` 和逐帧 `actions`。默认每次运行都会写入 `replays/`，文件名包含时间戳、`manual`/`agent`/`llm` 模式和 seed 后缀；也可以用 `--record run.json` 指定路径。录制时每次推进游戏帧都会写入 `jump`、`duck` 或 `none`；Game Over 后手动按 `R` 会记录 `reset`。`trex replay` 会先列出历史运行记录，方向键选择后回车进入重放；重放时先按 `seed` 初始化随机数，再逐帧喂回动作，因此不依赖实时键盘输入或 Agent 决策。
 
 ## 物理参数
 

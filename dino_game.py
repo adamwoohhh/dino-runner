@@ -21,6 +21,9 @@ Terminal Dino Runner — Chrome 断网小恐龙的终端版本
   python dino_game.py            # 人类手动玩
   python dino_game.py --agent    # 规则 AI Agent 自动玩
   python dino_game.py --llm      # Claude LLM Agent 玩 (需要 ANTHROPIC_API_KEY)
+  python dino_game.py replay     # 从运行记录列表选择并重放
+  python dino_game.py --record run.json  # 指定录制文件
+  python dino_game.py --replay run.json  # 重放一局
 
 游戏内操控:
   SPACE / ↑  跳跃
@@ -70,6 +73,7 @@ SPAWN_MAX = 90            # 连续障碍物之间的最大间距（终端列）
 RUN_ANIM_FRAME_INTERVAL = max(1, round(FPS / 12))
 BIRD_ANIM_FRAME_INTERVAL = max(1, round(FPS / 8))
 SPEED_DROP_MULTIPLIER = 3.0
+REPLAY_DIR = "replays"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -695,6 +699,206 @@ def should_reset_after_game_over(key: int, agent_active: bool = False) -> bool:
     return key == ord('r') or key == ord('R')
 
 
+def load_replay_file(path) -> dict:
+    """读取 replay JSON 文件。"""
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def game_mode_from_args(args: list[str]) -> str:
+    """根据命令行参数返回运行模式名。"""
+    if "--llm" in args:
+        return "llm"
+    if "--agent" in args:
+        return "agent"
+    return "manual"
+
+
+def default_replay_path(mode: str, seed: int | None = None, directory: str = REPLAY_DIR) -> str:
+    """生成默认运行记录文件路径。"""
+    if seed is None:
+        seed = time.time_ns()
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    suffix = str(seed)[-6:]
+    return os.path.join(directory, f"{timestamp}-{mode}-{suffix}.json")
+
+
+def list_replay_files(directory: str = REPLAY_DIR) -> list[str]:
+    """列出 replay JSON 文件，按最近修改时间倒序。"""
+    if not os.path.isdir(directory):
+        return []
+    paths = [
+        os.path.join(directory, name)
+        for name in os.listdir(directory)
+        if name.endswith(".json") and os.path.isfile(os.path.join(directory, name))
+    ]
+    return sorted(paths, key=lambda path: os.path.getmtime(path), reverse=True)
+
+
+def move_replay_selection(index: int, key: int, count: int) -> int:
+    """根据上下方向键移动 replay 菜单光标。"""
+    if count <= 0:
+        return 0
+    if key == curses.KEY_UP:
+        return (index - 1) % count
+    if key == curses.KEY_DOWN:
+        return (index + 1) % count
+    return index
+
+
+def select_replay_file(stdscr, paths: list[str]) -> str | None:
+    """在 curses 中列出运行记录，让用户选择要重放的文件。"""
+    curses.curs_set(0)
+    stdscr.keypad(True)
+    stdscr.nodelay(False)
+    index = 0
+
+    while True:
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+        title = "选择要重放的运行记录"
+        try:
+            stdscr.addstr(1, 2, title, curses.A_BOLD)
+        except curses.error:
+            pass
+
+        if not paths:
+            msg = f"没有找到运行记录目录 {REPLAY_DIR}/ 下的 .json 文件"
+            hint = "按 Enter / Q 返回"
+            for y, text in ((3, msg), (5, hint)):
+                try:
+                    stdscr.addstr(y, 2, text[:max(0, w - 4)])
+                except curses.error:
+                    pass
+            stdscr.refresh()
+            key = stdscr.getch()
+            if key in (10, 13, ord("q"), ord("Q"), 27):
+                return None
+            continue
+
+        visible_rows = max(1, h - 5)
+        start = min(max(0, index - visible_rows + 1), max(0, len(paths) - visible_rows))
+        for row, path in enumerate(paths[start:start + visible_rows]):
+            item_index = start + row
+            basename = os.path.basename(path)
+            mtime = time.strftime(
+                "%Y-%m-%d %H:%M:%S",
+                time.localtime(os.path.getmtime(path)),
+            )
+            marker = "> " if item_index == index else "  "
+            text = f"{marker}{basename}  {mtime}"
+            attr = curses.A_REVERSE if item_index == index else curses.A_NORMAL
+            try:
+                stdscr.addstr(3 + row, 2, text[:max(0, w - 4)], attr)
+            except curses.error:
+                pass
+
+        hint = "↑/↓ 选择 | Enter 回放 | Q 退出"
+        try:
+            stdscr.addstr(h - 1, 2, hint[:max(0, w - 4)], curses.A_DIM)
+        except curses.error:
+            pass
+        stdscr.refresh()
+
+        key = stdscr.getch()
+        if key in (10, 13):
+            return paths[index]
+        if key in (ord("q"), ord("Q"), 27):
+            return None
+        index = move_replay_selection(index, key, len(paths))
+
+
+class ReplayRecorder:
+    """把一局游戏的随机种子和逐帧动作写入文件。"""
+
+    def __init__(self, path, seed: int, mode: str = "manual"):
+        self.path = path
+        self.seed = seed
+        self.mode = mode
+        self.actions: list[str] = []
+
+    def record(self, action: str):
+        self.actions.append(action)
+
+    def save(self):
+        data = {
+            "version": 1,
+            "seed": self.seed,
+            "mode": self.mode,
+            "actions": self.actions,
+        }
+        directory = os.path.dirname(os.fspath(self.path))
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+class ReplayPlayer:
+    """按 replay 文件逐帧吐出动作。"""
+
+    def __init__(self, seed: int, actions: list[str], mode: str = "manual"):
+        self.seed = seed
+        self.actions = actions
+        self.mode = mode
+        self.index = 0
+
+    @classmethod
+    def from_file(cls, path):
+        data = load_replay_file(path)
+        return cls(
+            seed=data["seed"],
+            actions=list(data.get("actions", [])),
+            mode=data.get("mode", "manual"),
+        )
+
+    def next_action(self) -> str | None:
+        if self.index >= len(self.actions):
+            return None
+        action = self.actions[self.index]
+        self.index += 1
+        return action
+
+
+def apply_game_action(game: DinoGame, action: str):
+    """执行 replay/agent/manual 统一动作。"""
+    if action == "jump":
+        game.jump()
+        game.duck(False)
+    elif action == "duck":
+        game.duck(True)
+    else:
+        game.duck(False)
+
+
+def run_replay_simulation(seed: int, actions: list[str]) -> dict:
+    """无 UI 重放，用于测试 replay 是否确定性。"""
+    random.seed(seed)
+    game = DinoGame()
+    for action in actions:
+        if game.game_over:
+            if action == "reset":
+                game.reset()
+            continue
+        apply_game_action(game, action)
+        game.update()
+    return {
+        "score": game.score,
+        "game_over": game.game_over,
+        "state": game.get_state(),
+    }
+
+
+def arg_value(args: list[str], flag: str) -> str | None:
+    """从命令行参数中读取形如 `--flag path` 的值。"""
+    if flag not in args:
+        return None
+    index = args.index(flag)
+    if index + 1 >= len(args):
+        raise ValueError(f"{flag} 需要一个文件路径")
+    return args[index + 1]
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # 渲染器 — 把游戏状态画到终端
 # ═══════════════════════════════════════════════════════════════════════
@@ -881,6 +1085,26 @@ def main(stdscr):
       6. renderer.draw() 渲染画面
       7. 等待下一帧 (由 curses.timeout 控制)
     """
+    args = sys.argv[1:]
+    replay_subcommand = bool(args) and args[0] == "replay"
+    replay_path = arg_value(args, "--replay")
+    if replay_subcommand and not replay_path:
+        replay_path = select_replay_file(stdscr, list_replay_files())
+        if not replay_path:
+            return
+
+    record_path = arg_value(args, "--record")
+    replay_player = ReplayPlayer.from_file(replay_path) if replay_path else None
+    seed = replay_player.seed if replay_player else time.time_ns()
+    random.seed(seed)
+    mode = game_mode_from_args(args)
+    if replay_player:
+        recorder = ReplayRecorder(record_path, seed, mode="replay") if record_path else None
+    else:
+        if not record_path:
+            record_path = default_replay_path(mode, seed)
+        recorder = ReplayRecorder(record_path, seed, mode=mode)
+
     game = DinoGame()
     renderer = Renderer(stdscr)
     manual_input = ManualInputState()
@@ -889,7 +1113,9 @@ def main(stdscr):
     agent = None
     agent_name = ""
 
-    if "--llm" in sys.argv:
+    if replay_player:
+        agent_name = "Replay"
+    elif "--llm" in args:
         try:
             agent = LLMAgent()
             agent_name = "LLM Agent (Claude)"
@@ -897,53 +1123,75 @@ def main(stdscr):
             # 没有 API key，降级到规则 Agent
             agent = RuleAgent()
             agent_name = "Rule Agent (no API key)"
-    elif "--agent" in sys.argv:
+    elif "--agent" in args:
         agent = RuleAgent()
         agent_name = "Rule Agent"
 
-    while True:
-        key = stdscr.getch()    # 非阻塞，超时返回 -1
+    try:
+        while True:
+            key = stdscr.getch()    # 非阻塞，超时返回 -1
 
-        # ── 全局按键 ──
-        if key == ord('q') or key == ord('Q'):
-            break
+            # ── 全局按键 ──
+            if key == ord('q') or key == ord('Q'):
+                break
 
-        # A 键随时切换 人类 ↔ AI 模式
-        if key == ord('a') or key == ord('A'):
-            if agent:
-                agent = None
-                agent_name = ""
+            # A 键随时切换 人类 ↔ AI 模式；Replay 模式不切换
+            if not replay_player and (key == ord('a') or key == ord('A')):
+                if agent:
+                    agent = None
+                    agent_name = ""
+                else:
+                    agent = RuleAgent()
+                    agent_name = "Rule Agent"
+
+            # ── Game Over 状态 ──
+            if game.game_over:
+                if replay_player:
+                    action = replay_player.next_action()
+                    if action == "reset":
+                        game.reset()
+                    renderer.draw(game, agent_name)
+                    continue
+
+                if should_reset_after_game_over(key, agent_active=bool(agent)):
+                    game.reset()
+                    if recorder:
+                        recorder.record("reset")
+                renderer.draw(game, agent_name)
+                continue
+
+            # ── 输入处理 ──
+            if replay_player:
+                action = replay_player.next_action()
+                if action is None:
+                    renderer.draw(game, agent_name)
+                    continue
+                apply_game_action(game, action)
+            elif agent:
+                # Agent 模式: 读取状态 → 决策 → 执行动作
+                state = game.get_state()
+                action = agent.decide(state)
+                apply_game_action(game, action)
             else:
-                agent = RuleAgent()
-                agent_name = "Rule Agent"
+                # 人类模式: 直接响应键盘
+                action = "none"
+                if key == ord(' ') or key == curses.KEY_UP:
+                    action = "jump"
+                    game.jump()
+                ducking = manual_input.should_duck(key)
+                game.duck(ducking)
+                if action != "jump":
+                    action = "duck" if ducking else "none"
 
-        # ── Game Over 状态 ──
-        if game.game_over:
-            if should_reset_after_game_over(key, agent_active=bool(agent)):
-                game.reset()
+            if recorder:
+                recorder.record(action)
+
+            # ── 更新 & 渲染 ──
+            game.update()
             renderer.draw(game, agent_name)
-            continue
-
-        # ── 输入处理 ──
-        if agent:
-            # Agent 模式: 读取状态 → 决策 → 执行动作
-            state = game.get_state()
-            action = agent.decide(state)
-            if action == "jump":
-                game.jump()
-            elif action == "duck":
-                game.duck(True)
-            else:
-                game.duck(False)
-        else:
-            # 人类模式: 直接响应键盘
-            if key == ord(' ') or key == curses.KEY_UP:
-                game.jump()
-            game.duck(manual_input.should_duck(key))
-
-        # ── 更新 & 渲染 ──
-        game.update()
-        renderer.draw(game, agent_name)
+    finally:
+        if recorder:
+            recorder.save()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -960,6 +1208,9 @@ def cli():
     print("    trex          手动玩")
     print("    trex --agent  AI Agent 玩")
     print("    trex --llm    Claude LLM 玩")
+    print("    trex replay   选择运行记录并重放")
+    print("    trex --record run.json  指定录制文件")
+    print("    trex --replay run.json  直接重放文件")
     print()
     print("  启动中...")
     time.sleep(0.5)

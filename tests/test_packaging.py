@@ -1,5 +1,7 @@
 import importlib
+import os
 import pathlib
+import tempfile
 import tomllib
 import unittest
 
@@ -375,6 +377,90 @@ class GameOverFlowTest(unittest.TestCase):
 
         self.assertTrue(dino_game.should_reset_after_game_over(ord("r"), agent_active=True))
         self.assertTrue(dino_game.should_reset_after_game_over(ord("R"), agent_active=False))
+
+
+class ReplayTest(unittest.TestCase):
+    def test_replay_recorder_writes_seed_mode_and_actions(self):
+        dino_game = importlib.import_module("dino_game")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = pathlib.Path(tmpdir) / "run.json"
+            recorder = dino_game.ReplayRecorder(path, seed=123, mode="agent")
+            recorder.record("none")
+            recorder.record("jump")
+            recorder.save()
+
+            data = dino_game.load_replay_file(path)
+            self.assertEqual(data["seed"], 123)
+            self.assertEqual(data["mode"], "agent")
+            self.assertEqual(data["actions"], ["none", "jump"])
+
+    def test_replay_player_returns_recorded_mode_and_actions_in_order(self):
+        dino_game = importlib.import_module("dino_game")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = pathlib.Path(tmpdir) / "run.json"
+            path.write_text(
+                '{"version": 1, "seed": 99, "mode": "llm", '
+                '"actions": ["jump", "none"]}'
+            )
+
+            player = dino_game.ReplayPlayer.from_file(path)
+            self.assertEqual(player.seed, 99)
+            self.assertEqual(player.mode, "llm")
+            self.assertEqual(player.next_action(), "jump")
+            self.assertEqual(player.next_action(), "none")
+            self.assertIsNone(player.next_action())
+
+    def test_default_replay_path_uses_replay_directory_and_mode(self):
+        dino_game = importlib.import_module("dino_game")
+
+        path = dino_game.default_replay_path("manual", seed=123456, directory="runs")
+
+        self.assertTrue(path.startswith("runs" + os.sep))
+        self.assertIn("-manual-", pathlib.Path(path).name)
+        self.assertTrue(path.endswith(".json"))
+
+    def test_list_replay_files_returns_json_files_newest_first(self):
+        dino_game = importlib.import_module("dino_game")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            old_path = pathlib.Path(tmpdir) / "old.json"
+            new_path = pathlib.Path(tmpdir) / "new.json"
+            ignored_path = pathlib.Path(tmpdir) / "notes.txt"
+            old_path.write_text("{}")
+            new_path.write_text("{}")
+            ignored_path.write_text("ignore")
+            os.utime(old_path, (10, 10))
+            os.utime(new_path, (20, 20))
+
+            self.assertEqual(
+                dino_game.list_replay_files(tmpdir),
+                [str(new_path), str(old_path)],
+            )
+
+    def test_move_replay_selection_wraps_with_arrow_keys(self):
+        dino_game = importlib.import_module("dino_game")
+
+        self.assertEqual(dino_game.move_replay_selection(0, dino_game.curses.KEY_DOWN, 3), 1)
+        self.assertEqual(dino_game.move_replay_selection(0, dino_game.curses.KEY_UP, 3), 2)
+        self.assertEqual(dino_game.move_replay_selection(2, dino_game.curses.KEY_DOWN, 3), 0)
+
+    def test_game_mode_from_args_tracks_manual_agent_and_llm(self):
+        dino_game = importlib.import_module("dino_game")
+
+        self.assertEqual(dino_game.game_mode_from_args([]), "manual")
+        self.assertEqual(dino_game.game_mode_from_args(["--agent"]), "agent")
+        self.assertEqual(dino_game.game_mode_from_args(["--llm"]), "llm")
+
+    def test_replay_seed_and_actions_are_deterministic(self):
+        dino_game = importlib.import_module("dino_game")
+        actions = ["none"] * 20 + ["jump"] + ["none"] * 40
+
+        first = dino_game.run_replay_simulation(seed=42, actions=actions)
+        second = dino_game.run_replay_simulation(seed=42, actions=actions)
+
+        self.assertEqual(first, second)
 
 
 if __name__ == "__main__":
