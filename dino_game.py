@@ -32,6 +32,7 @@ Terminal Dino Runner — Chrome 断网小恐龙的终端版本
 游戏内操控:
   SPACE / ↑  跳跃
   ↓          蹲下（地面）/ 快速下落（空中）
+  Enter      暂停；暂停时再次按下会倒计时 3 秒后继续
   R          Game Over 后重新开始
   Q          退出
 
@@ -45,6 +46,7 @@ import sys
 import os
 import json
 import threading
+import math
 from dataclasses import dataclass
 from importlib import metadata
 
@@ -80,6 +82,7 @@ BIRD_ANIM_FRAME_INTERVAL = max(1, round(FPS / 8))
 SPEED_DROP_MULTIPLIER = 3.0
 REPLAY_DIR = "replays"
 VERSION = "0.1.0"
+PAUSE_COUNTDOWN_SECONDS = 3
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -722,6 +725,53 @@ class ManualInputState:
 def should_reset_after_game_over(key: int, agent_active: bool = False) -> bool:
     """Game Over 后只允许玩家显式按 R 重开。"""
     return key == ord('r') or key == ord('R')
+
+
+@dataclass(frozen=True)
+class PauseState:
+    """游戏暂停状态。"""
+
+    status: str = "running"
+    countdown_started_at: float | None = None
+
+
+def is_enter_key(key: int) -> bool:
+    """判断按键是否为 Enter。"""
+    return key in (10, 13, getattr(curses, "KEY_ENTER", 343))
+
+
+def countdown_remaining_seconds(pause_state: PauseState, now: float) -> int:
+    """返回倒计时剩余秒数，向上取整用于显示。"""
+    if pause_state.countdown_started_at is None:
+        return PAUSE_COUNTDOWN_SECONDS
+    elapsed = now - pause_state.countdown_started_at
+    return max(0, math.ceil(PAUSE_COUNTDOWN_SECONDS - elapsed))
+
+
+def next_pause_state(pause_state: PauseState, key: int, now: float) -> PauseState:
+    """根据当前按键和时间推进暂停状态机。"""
+    if pause_state.status == "countdown" and countdown_remaining_seconds(pause_state, now) <= 0:
+        return PauseState()
+    if pause_state.status == "running" and is_enter_key(key):
+        return PauseState(status="paused")
+    if pause_state.status == "paused" and is_enter_key(key):
+        return PauseState(status="countdown", countdown_started_at=now)
+    return pause_state
+
+
+def pause_allows_game_update(pause_state: PauseState, now: float) -> bool:
+    """判断当前暂停状态是否允许推进游戏帧。"""
+    return next_pause_state(pause_state, -1, now).status == "running"
+
+
+def pause_overlay_lines(pause_state: PauseState, now: float) -> list[str]:
+    """返回暂停/倒计时居中提示文案。"""
+    if pause_state.status == "paused":
+        return ["PAUSED", "Press Enter to resume"]
+    if pause_state.status == "countdown":
+        remaining = countdown_remaining_seconds(pause_state, now)
+        return [str(max(1, remaining)), "Get ready"]
+    return []
 
 
 def load_replay_file(path) -> dict:
@@ -1509,12 +1559,12 @@ def finish_recording(recorder: ReplayRecorder | None):
 def footer_hint(agent_name: str, speed: float) -> str:
     """根据当前模式返回底部操作提示。"""
     if agent_name == "Competition":
-        return f"SPACE/↑ 跳跃 | ↓ 蹲下 | Q 退出 | 竞技 | 速度 {speed:.1f}x"
+        return f"SPACE/↑ 跳跃 | ↓ 蹲下 | Enter 暂停 | Q 退出 | 竞技 | 速度 {speed:.1f}x"
     if agent_name == "Replay":
-        return f"Q 退出 | 回放 | 速度 {speed:.1f}x"
+        return f"Enter 暂停 | Q 退出 | 回放 | 速度 {speed:.1f}x"
     if agent_name:
-        return f"Q 退出 | 速度 {speed:.1f}x"
-    return "SPACE/↑ 跳跃 | ↓ 蹲下 | Q 退出"
+        return f"Enter 暂停 | Q 退出 | 速度 {speed:.1f}x"
+    return "SPACE/↑ 跳跃 | ↓ 蹲下 | Enter 暂停 | Q 退出"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1696,7 +1746,26 @@ class Renderer:
         self.safe_addstr(h - 1, 2, hint[:max(0, w - 4)], curses.A_DIM)
         self.scr.refresh()
 
-    def draw(self, game: DinoGame, agent_name: str):
+    def draw_center_overlay(self, lines: list[str], color_pair: int = 3):
+        """在屏幕中央绘制多行提示。"""
+        if not lines:
+            return
+        h, w = self.scr.getmaxyx()
+        mid_y = h // 2 - len(lines) // 2
+        for index, line in enumerate(lines):
+            x = max(0, w // 2 - len(line) // 2)
+            self.safe_addstr(
+                mid_y + index,
+                x,
+                line,
+                curses.A_BOLD | curses.color_pair(color_pair),
+            )
+
+    def draw_pause_overlay(self, pause_state: PauseState, now: float):
+        """绘制暂停或恢复倒计时提示。"""
+        self.draw_center_overlay(pause_overlay_lines(pause_state, now), color_pair=3)
+
+    def draw(self, game: DinoGame, agent_name: str, pause_state: PauseState | None = None, now: float | None = None):
         """绘制完整的一帧画面
 
         绘制顺序（从后到前）:
@@ -1802,6 +1871,9 @@ class Renderer:
                 self.safe_addstr(mid_y + i, mid_x, line,
                                  curses.A_BOLD | curses.color_pair(3))
 
+        if pause_state and pause_state.status != "running":
+            self.draw_pause_overlay(pause_state, now if now is not None else time.monotonic())
+
         # ── 底部操作提示 ──
         hint = footer_hint(agent_name, game.speed)
         self.safe_addstr(h - 1, 2, hint, curses.A_DIM)
@@ -1825,15 +1897,24 @@ def manual_action_from_key(input_state: ManualInputState, key: int) -> str:
 def run_competition_loop(stdscr, renderer: Renderer, competition: CompetitionRun):
     """运行竞技模式主循环。"""
     manual_input = ManualInputState()
+    pause_state = PauseState()
     renderer.draw_competition(competition)
 
     while True:
         key = stdscr.getch()
         if key == ord('q') or key == ord('Q'):
             break
+        now = time.monotonic()
+        pause_state = next_pause_state(pause_state, key, now)
 
         if competition.finished:
             renderer.draw_competition(competition)
+            continue
+
+        if pause_state.status != "running":
+            renderer.draw_competition(competition)
+            renderer.draw_pause_overlay(pause_state, now)
+            renderer.scr.refresh()
             continue
 
         action = "none"
@@ -1900,6 +1981,7 @@ def main(stdscr, cli_args: CliArgs | None = None):
         game, recorder = start_recording_run(mode, record_path, run_index)
 
     manual_input = ManualInputState()
+    pause_state = PauseState()
     event_frame = 0
 
     # 根据命令行参数选择 Agent 模式
@@ -1927,6 +2009,8 @@ def main(stdscr, cli_args: CliArgs | None = None):
             # ── 全局按键 ──
             if key == ord('q') or key == ord('Q'):
                 break
+            now = time.monotonic()
+            pause_state = next_pause_state(pause_state, key, now)
 
             # ── Game Over 状态 ──
             if game.game_over:
@@ -1945,8 +2029,13 @@ def main(stdscr, cli_args: CliArgs | None = None):
                     run_index += 1
                     game, recorder = start_recording_run(mode, record_path, run_index)
                     manual_input = ManualInputState()
+                    pause_state = PauseState()
                     event_frame = 0
                 renderer.draw(game, agent_name)
+                continue
+
+            if pause_state.status != "running":
+                renderer.draw(game, agent_name, pause_state, now)
                 continue
 
             # ── 输入处理 ──

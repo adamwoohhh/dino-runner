@@ -99,6 +99,7 @@ python3 dino_game.py compete run.json
 |------|------|
 | `SPACE` / `↑` | 跳跃 |
 | `↓` | 蹲下（地面）/ 快速下落（空中） |
+| `Enter` | 暂停；暂停时再次按下会倒计时 3 秒后继续 |
 | `R` | Game Over 后重新开始 |
 | `Q` | 退出 |
 
