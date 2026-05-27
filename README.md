@@ -4,49 +4,45 @@ Chrome 断网小恐龙的终端版。可以手动玩，也可以让规则 Agent 
 
 ## 安装
 
-在项目目录中安装到本地虚拟环境 `.venv`：
+推荐用 `pipx` 安装，这样会把命令行工具放在独立环境里：
 
 ```bash
-make install
+pipx install ai-dino-in-terminal
+dino
 ```
 
-这会创建 `.venv`，并把命令安装到：
+也可以用 `pip` 安装：
 
-```text
-.venv/bin/dino
+```bash
+pip install ai-dino-in-terminal
+dino
 ```
+
+本地开发安装见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 启动
 
 ```bash
 # 人类手动玩
-make run
+dino
 
 # 规则 Agent 自动玩
-make agent
+dino --agent
 
 # Claude LLM Agent 自动玩
 export ANTHROPIC_API_KEY=sk-ant-...
-make llm
+dino --llm
 
 # 选择历史运行记录并重放
-.venv/bin/dino replay
+dino replay
 
 # 选择历史运行记录并进入竞技模式
-.venv/bin/dino compete
+dino compete
 ```
 
-也可以直接使用底层命令：
+也可以直接运行源码：
 
 ```bash
-.venv/bin/dino
-.venv/bin/dino --agent
-.venv/bin/dino --llm
-.venv/bin/dino replay
-.venv/bin/dino compete
-.venv/bin/dino --record run.json
-.venv/bin/dino --replay run.json
-.venv/bin/dino --compete run.json
 python3 dino_game.py
 python3 dino_game.py --agent
 python3 dino_game.py --llm

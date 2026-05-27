@@ -63,6 +63,41 @@ test -x .venv/bin/dino
 
 期望 `dino` 入口指向 `dino_game:cli`。
 
+## 构建和发布
+
+PyPI 包名是 `ai-dino-in-terminal`，安装后暴露的命令是 `dino`。
+
+构建发布包需要本地安装维护者工具：
+
+```bash
+python3 -m pip install build twine
+```
+
+构建 wheel 和 source distribution：
+
+```bash
+make build
+```
+
+上传到 TestPyPI：
+
+```bash
+make publish-test
+```
+
+上传到 PyPI：
+
+```bash
+make publish
+```
+
+发布前至少运行：
+
+```bash
+make check
+make build
+```
+
 ## 项目结构
 
 项目主体是单文件游戏：
@@ -84,6 +119,9 @@ dino_game.py
 打包入口在 `pyproject.toml`：
 
 ```toml
+[project]
+name = "ai-dino-in-terminal"
+
 [project.scripts]
 dino = "dino_game:cli"
 ```

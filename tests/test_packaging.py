@@ -7,9 +7,19 @@ import unittest
 
 
 class PackagingTest(unittest.TestCase):
+    def project_root(self):
+        return pathlib.Path(__file__).resolve().parents[1]
+
+    def load_pyproject(self):
+        return tomllib.loads((self.project_root() / "pyproject.toml").read_text())
+
+    def test_distribution_name_is_ai_dino_in_terminal(self):
+        pyproject = self.load_pyproject()
+
+        self.assertEqual(pyproject["project"]["name"], "ai-dino-in-terminal")
+
     def test_dino_console_script_points_at_cli_entrypoint(self):
-        project_root = pathlib.Path(__file__).resolve().parents[1]
-        pyproject = tomllib.loads((project_root / "pyproject.toml").read_text())
+        pyproject = self.load_pyproject()
 
         scripts = pyproject["project"]["scripts"]
         self.assertEqual(scripts["dino"], "dino_game:cli")
@@ -17,6 +27,13 @@ class PackagingTest(unittest.TestCase):
 
         dino_game = importlib.import_module("dino_game")
         self.assertTrue(callable(dino_game.cli))
+
+    def test_readme_documents_pip_and_pipx_installation(self):
+        readme = (self.project_root() / "README.md").read_text()
+
+        self.assertIn("pipx install ai-dino-in-terminal", readme)
+        self.assertIn("pip install ai-dino-in-terminal", readme)
+        self.assertIn("dino", readme)
 
 
 class GameTuningTest(unittest.TestCase):
