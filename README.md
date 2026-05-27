@@ -13,7 +13,7 @@ make install
 这会创建 `.venv`，并把命令安装到：
 
 ```text
-.venv/bin/trex
+.venv/bin/dino
 ```
 
 ## 启动
@@ -30,23 +30,23 @@ export ANTHROPIC_API_KEY=sk-ant-...
 make llm
 
 # 选择历史运行记录并重放
-.venv/bin/trex replay
+.venv/bin/dino replay
 
 # 选择历史运行记录并进入竞技模式
-.venv/bin/trex compete
+.venv/bin/dino compete
 ```
 
 也可以直接使用底层命令：
 
 ```bash
-.venv/bin/trex
-.venv/bin/trex --agent
-.venv/bin/trex --llm
-.venv/bin/trex replay
-.venv/bin/trex compete
-.venv/bin/trex --record run.json
-.venv/bin/trex --replay run.json
-.venv/bin/trex --compete run.json
+.venv/bin/dino
+.venv/bin/dino --agent
+.venv/bin/dino --llm
+.venv/bin/dino replay
+.venv/bin/dino compete
+.venv/bin/dino --record run.json
+.venv/bin/dino --replay run.json
+.venv/bin/dino --compete run.json
 python3 dino_game.py
 python3 dino_game.py --agent
 python3 dino_game.py --llm
@@ -61,16 +61,16 @@ python3 dino_game.py --compete run.json
 
 | 命令 | 说明 | 依赖 |
 |------|------|------|
-| `trex` | 手动操作恐龙 | 无 |
-| `trex --agent` | 使用本地规则 Agent 自动决策 | 无 |
-| `trex --llm` | 使用 Claude API 决策 | `ANTHROPIC_API_KEY` |
-| `trex replay` | 从历史运行记录列表选择并重放 | `replays/*.json` |
-| `trex compete` | 从历史运行记录列表选择一局并进入双赛道竞技 | `replays/*.json` |
-| `trex --record run.json` | 指定录制文件路径 | 无 |
-| `trex --replay run.json` | 直接从指定文件重放 | 对应 replay 文件 |
-| `trex --compete run.json` | 直接使用指定 replay 进入竞技模式 | 对应 replay 文件 |
+| `dino` | 手动操作恐龙 | 无 |
+| `dino --agent` | 使用本地规则 Agent 自动决策 | 无 |
+| `dino --llm` | 使用 Claude API 决策 | `ANTHROPIC_API_KEY` |
+| `dino replay` | 从历史运行记录列表选择并重放 | `replays/*.json` |
+| `dino compete` | 从历史运行记录列表选择一局并进入双赛道竞技 | `replays/*.json` |
+| `dino --record run.json` | 指定录制文件路径 | 无 |
+| `dino --replay run.json` | 直接从指定文件重放 | 对应 replay 文件 |
+| `dino --compete run.json` | 直接使用指定 replay 进入竞技模式 | 对应 replay 文件 |
 
-如果 `trex --llm` 没有检测到 `ANTHROPIC_API_KEY`，游戏会降级为规则 Agent。
+如果 `dino --llm` 没有检测到 `ANTHROPIC_API_KEY`，游戏会降级为规则 Agent。
 
 默认每次运行都会记录到 `replays/` 目录，文件名形如
 `20260527-153012-manual-123456.json`，其中包含运行模式 `manual`、`agent`

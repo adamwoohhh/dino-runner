@@ -4,7 +4,7 @@ SYSTEM_PYTHON ?= python3
 VENV ?= .venv
 PYTHON := $(VENV)/bin/python
 PIP := $(PYTHON) -m pip
-TREX := $(VENV)/bin/trex
+DINO := $(VENV)/bin/dino
 
 venv:
 	$(SYSTEM_PYTHON) -m venv $(VENV)
@@ -22,16 +22,16 @@ check: test
 	env PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m py_compile dino_game.py
 
 run:
-	$(TREX)
+	$(DINO)
 
 compete:
-	$(TREX) compete
+	$(DINO) compete
 
 agent:
-	$(TREX) --agent
+	$(DINO) --agent
 
 llm:
-	$(TREX) --llm
+	$(DINO) --llm
 
 clean:
 	rm -rf __pycache__ tests/__pycache__ *.egg-info build dist

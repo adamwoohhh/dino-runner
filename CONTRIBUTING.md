@@ -13,9 +13,9 @@ make dev-install
 安装后可以用 `make run`、`make agent`、`make llm` 启动，也可以直接运行虚拟环境里的命令：
 
 ```bash
-.venv/bin/trex
-.venv/bin/trex --agent
-.venv/bin/trex --llm
+.venv/bin/dino
+.venv/bin/dino --agent
+.venv/bin/dino --llm
 ```
 
 直接运行源码也仍然可用：
@@ -41,14 +41,14 @@ make check
 常用命令由 `Makefile` 管理：
 
 ```bash
-make install      # 安装 trex 命令
+make install      # 安装 dino 命令
 make dev-install  # editable 安装，适合开发
-make run          # .venv/bin/trex
-make agent        # .venv/bin/trex --agent
-make llm          # .venv/bin/trex --llm
-.venv/bin/trex replay             # 选择运行记录并重放
-.venv/bin/trex --record run.json  # 指定 replay 录制路径
-.venv/bin/trex --replay run.json  # 直接重放 replay 文件
+make run          # .venv/bin/dino
+make agent        # .venv/bin/dino --agent
+make llm          # .venv/bin/dino --llm
+.venv/bin/dino replay             # 选择运行记录并重放
+.venv/bin/dino --record run.json  # 指定 replay 录制路径
+.venv/bin/dino --replay run.json  # 直接重放 replay 文件
 make test         # 运行 unittest
 make check        # 测试 + py_compile
 make clean        # 清理缓存和构建产物
@@ -57,11 +57,11 @@ make clean        # 清理缓存和构建产物
 如果改动了命令入口或打包配置，需要确认：
 
 ```bash
-python3 -c "import importlib.metadata as m; print([ep.value for ep in m.entry_points(group='console_scripts') if ep.name == 'trex'])"
-test -x .venv/bin/trex
+python3 -c "import importlib.metadata as m; print([ep.value for ep in m.entry_points(group='console_scripts') if ep.name == 'dino'])"
+test -x .venv/bin/dino
 ```
 
-期望 `trex` 入口指向 `dino_game:cli`。
+期望 `dino` 入口指向 `dino_game:cli`。
 
 ## 项目结构
 
@@ -85,7 +85,7 @@ dino_game.py
 
 ```toml
 [project.scripts]
-trex = "dino_game:cli"
+dino = "dino_game:cli"
 ```
 
 ## Agent 数据流
@@ -141,7 +141,7 @@ state = game.get_state()
 
 ## Replay
 
-Replay 文件是 JSON，包含 `version`、`seed`、`mode`、`frames`、`actions` 和 `obstacles`。默认每局 Game Over 时写入 `replays/`，文件名包含时间戳、`manual`/`agent`/`llm` 模式和 seed 后缀；也可以用 `--record run.json` 指定第一局路径，后续局会追加 `-2`、`-3` 后缀。`actions` 和 `obstacles` 都保存为 `{"frame": number, "action": ActionData | ObstacleData}`，数组语义已经区分输入和障碍物，因此不再写 `type=input` 或 `type=obstacle`；`actions` 不记录 `none` 帧，空操作由缺省值表示，`frames` 保留总回放长度。未结束时按 `Q` 或用 `Ctrl+C` 退出不会保存未完成 replay。`trex replay` 会先列出历史运行记录，方向键选择后回车进入重放；重放时按文件里的障碍物数据注入障碍物，因此不依赖随机调用顺序。
+Replay 文件是 JSON，包含 `version`、`seed`、`mode`、`frames`、`actions` 和 `obstacles`。默认每局 Game Over 时写入 `replays/`，文件名包含时间戳、`manual`/`agent`/`llm` 模式和 seed 后缀；也可以用 `--record run.json` 指定第一局路径，后续局会追加 `-2`、`-3` 后缀。`actions` 和 `obstacles` 都保存为 `{"frame": number, "action": ActionData | ObstacleData}`，数组语义已经区分输入和障碍物，因此不再写 `type=input` 或 `type=obstacle`；`actions` 不记录 `none` 帧，空操作由缺省值表示，`frames` 保留总回放长度。未结束时按 `Q` 或用 `Ctrl+C` 退出不会保存未完成 replay。`dino replay` 会先列出历史运行记录，方向键选择后回车进入重放；重放时按文件里的障碍物数据注入障碍物，因此不依赖随机调用顺序。
 
 ## 物理参数
 

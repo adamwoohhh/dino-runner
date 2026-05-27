@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 
 [project.scripts]
-trex = "dino_game:cli"
+dino = "dino_game:cli"
 
 [tool.setuptools]
 py-modules = ["dino_game"]
