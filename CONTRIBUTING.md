@@ -14,8 +14,8 @@ make dev-install
 
 ```bash
 .venv/bin/dino
-.venv/bin/dino --agent
-.venv/bin/dino --llm
+.venv/bin/dino agent
+.venv/bin/dino llm
 ```
 
 直接运行源码也仍然可用：
@@ -44,11 +44,13 @@ make check
 make install      # 安装 dino 命令
 make dev-install  # editable 安装项目和 .[dev] 工具
 make run          # .venv/bin/dino
-make agent        # .venv/bin/dino --agent
-make llm          # .venv/bin/dino --llm
+make agent        # .venv/bin/dino agent
+make llm          # .venv/bin/dino llm
 .venv/bin/dino replay             # 选择运行记录并重放
-.venv/bin/dino --record run.json  # 指定 replay 录制路径
-.venv/bin/dino --replay run.json  # 直接重放 replay 文件
+.venv/bin/dino play --record run.json  # 指定 replay 录制路径
+.venv/bin/dino replay run.json         # 直接重放 replay 文件
+.venv/bin/dino replay +list            # 浏览 replay 文件并查看元信息
+.venv/bin/dino replay +clear           # 清除所有 replay 记录文件
 make test         # 运行 unittest
 make check        # 测试 + py_compile
 make clean        # 清理缓存和构建产物
@@ -181,7 +183,7 @@ state = game.get_state()
 
 ## Replay
 
-Replay 文件是 JSON，包含 `version`、`seed`、`mode`、`frames`、`actions` 和 `obstacles`。默认每局 Game Over 时写入 `replays/`，文件名包含时间戳、`manual`/`agent`/`llm` 模式和 seed 后缀；也可以用 `--record run.json` 指定第一局路径，后续局会追加 `-2`、`-3` 后缀。`actions` 和 `obstacles` 都保存为 `{"frame": number, "action": ActionData | ObstacleData}`，数组语义已经区分输入和障碍物，因此不再写 `type=input` 或 `type=obstacle`；`actions` 不记录 `none` 帧，空操作由缺省值表示，`frames` 保留总回放长度。未结束时按 `Q` 或用 `Ctrl+C` 退出不会保存未完成 replay。`dino replay` 会先列出历史运行记录，方向键选择后回车进入重放；重放时按文件里的障碍物数据注入障碍物，因此不依赖随机调用顺序。
+Replay 文件是 JSON，包含 `version`、`seed`、`mode`、`frames`、`actions` 和 `obstacles`。默认每局 Game Over 时写入 `replays/`，文件名包含时间戳、`manual`/`agent`/`llm` 模式和 seed 后缀；也可以用 `dino play --record run.json` 指定第一局路径，后续局会追加 `-2`、`-3` 后缀。`actions` 和 `obstacles` 都保存为 `{"frame": number, "action": ActionData | ObstacleData}`，数组语义已经区分输入和障碍物，因此不再写 `type=input` 或 `type=obstacle`；`actions` 不记录 `none` 帧，空操作由缺省值表示，`frames` 保留总回放长度。未结束时按 `Q` 或用 `Ctrl+C` 退出不会保存未完成 replay。`dino replay` 会先列出历史运行记录，方向键选择后回车进入重放；重放时按文件里的障碍物数据注入障碍物，因此不依赖随机调用顺序。`dino replay +list` 会进入只读列表，回车展示选中文件的模式、帧数、创建时间、竞技标记和源记录；`dino replay +clear` 会删除 `replays/` 下所有 `.json` 记录文件。
 
 ## 物理参数
 

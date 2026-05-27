@@ -18,14 +18,16 @@ Terminal Dino Runner — Chrome 断网小恐龙的终端版本
   └──────────┘                     └───────────┘
 
 三种运行模式:
-  python dino_game.py            # 人类手动玩
-  python dino_game.py --agent    # 规则 AI Agent 自动玩
-  python dino_game.py --llm      # Claude LLM Agent 玩 (需要 ANTHROPIC_API_KEY)
-  python dino_game.py replay     # 从运行记录列表选择并重放
-  python dino_game.py compete    # 选择一条运行记录并进入竞技模式
-  python dino_game.py --record run.json  # 指定录制文件
-  python dino_game.py --replay run.json  # 重放一局
-  python dino_game.py --compete run.json # 直接竞技指定记录
+  python dino_game.py                 # 等价于 play，人类手动玩
+  python dino_game.py play            # 人类手动玩
+  python dino_game.py agent           # 规则 AI Agent 自动玩
+  python dino_game.py llm             # Claude LLM Agent 玩 (需要 ANTHROPIC_API_KEY)
+  python dino_game.py replay          # 从运行记录列表选择并重放
+  python dino_game.py replay run.json # 重放一局
+  python dino_game.py replay +list    # 浏览记录并查看元信息
+  python dino_game.py replay +clear   # 清除所有记录
+  python dino_game.py compete         # 选择一条运行记录并进入竞技模式
+  python dino_game.py compete run.json # 直接竞技指定记录
 
 游戏内操控:
   SPACE / ↑  跳跃
@@ -43,6 +45,8 @@ import sys
 import os
 import json
 import threading
+from dataclasses import dataclass
+from importlib import metadata
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -75,6 +79,7 @@ RUN_ANIM_FRAME_INTERVAL = max(1, round(FPS / 12))
 BIRD_ANIM_FRAME_INTERVAL = max(1, round(FPS / 8))
 SPEED_DROP_MULTIPLIER = 3.0
 REPLAY_DIR = "replays"
+VERSION = "0.1.0"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -725,34 +730,217 @@ def load_replay_file(path) -> dict:
         return json.load(f)
 
 
+@dataclass(frozen=True)
+class CliArgs:
+    """规范化后的命令行参数。"""
+
+    command: str = "play"
+    mode: str = "manual"
+    record_path: str | None = None
+    replay_path: str | None = None
+    replay_action: str = "play"
+    competition_path: str | None = None
+    show_help: bool = False
+    help_text: str | None = None
+    version: str | None = None
+
+
+COMMAND_GROUPS = [
+    ("Core", [
+        ("play", "Start a manual game"),
+        ("agent", "Run with the local rule-based agent"),
+        ("llm", "Run with the Claude LLM agent"),
+    ]),
+    ("Replay", [
+        ("replay", "Play, inspect, or clear replay records"),
+    ]),
+    ("Competition", [
+        ("compete", "Start competition mode from a replay"),
+    ]),
+    ("Help", [
+        ("help", "Show available commands and global options"),
+    ]),
+]
+
+COMMAND_DESCRIPTIONS = {
+    name: description
+    for _, commands in COMMAND_GROUPS
+    for name, description in commands
+}
+RUN_COMMAND_MODES = {
+    "play": "manual",
+    "agent": "agent",
+    "llm": "llm",
+}
+HELP_FLAGS = {"--help", "-H"}
+VERSION_FLAGS = {"--version", "-V"}
+
+
+def tool_version() -> str:
+    """返回安装包版本；源码运行时回退到本文件常量。"""
+    try:
+        return metadata.version("ai-dino-in-terminal")
+    except metadata.PackageNotFoundError:
+        return VERSION
+
+
+def render_main_help() -> str:
+    """渲染总 help，只展示子命令和公共参数。"""
+    lines = [
+        "Terminal Dino Runner",
+        "",
+        "Usage: dino <command> [options]",
+        "Default: dino is equivalent to dino play",
+        "",
+        "Commands:",
+    ]
+    for group_name, commands in COMMAND_GROUPS:
+        lines.append(f"  {group_name}")
+        for name, description in commands:
+            lines.append(f"    {name:<8} {description}")
+        lines.append("")
+    lines.extend([
+        "Global options:",
+        "  --help, -H       Show full usage and options for the current command",
+        "  --version, -V    Show the tool version",
+    ])
+    return "\n".join(lines)
+
+
+def render_command_help(command: str) -> str:
+    """渲染某个子命令的完整用法和参数。"""
+    if command == "play":
+        usage = "dino play [--record FILE]"
+        options = ["  --record FILE    Write the replay recording to FILE"]
+    elif command == "agent":
+        usage = "dino agent [--record FILE]"
+        options = ["  --record FILE    Write the replay recording to FILE"]
+    elif command == "llm":
+        usage = "dino llm [--record FILE]"
+        options = ["  --record FILE    Write the replay recording to FILE"]
+    elif command == "replay":
+        usage = "dino replay [FILE]"
+        options = [
+            "  FILE             Replay FILE directly; omit it to choose from a list",
+            "  +list            List replay files and press Enter to inspect metadata",
+            "  +clear           Delete all replay record files",
+            "",
+            "Examples:",
+            "  dino replay +list",
+            "  dino replay +clear",
+        ]
+    elif command == "compete":
+        usage = "dino compete [FILE] [--record FILE]"
+        options = [
+            "  FILE             Start competition from FILE; omit it to choose from a list",
+            "  --record FILE    Write the competition replay recording to FILE",
+        ]
+    elif command == "help":
+        usage = "dino help [command]"
+        options = ["  command          Show full usage and options for a command"]
+    else:
+        return render_main_help()
+
+    lines = [
+        f"Usage: {usage}",
+        "",
+        COMMAND_DESCRIPTIONS[command],
+        "",
+        "Options:",
+        *options,
+        "",
+        "Global options:",
+        "  --help, -H       Show full usage and options for the current command",
+        "  --version, -V    Show the tool version",
+    ]
+    return "\n".join(lines)
+
+
+def _split_record_option(args: list[str]) -> tuple[str | None, list[str]]:
+    """从参数列表中取出 --record FILE，并返回剩余参数。"""
+    record_path = None
+    remaining = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--record":
+            if index + 1 >= len(args) or args[index + 1].startswith("-"):
+                raise ValueError("--record 需要一个文件路径")
+            record_path = args[index + 1]
+            index += 2
+            continue
+        remaining.append(arg)
+        index += 1
+    return record_path, remaining
+
+
+def parse_cli_args(args: list[str]) -> CliArgs:
+    """解析新命令行接口；无法识别的子命令回退到总 help。"""
+    args = list(args)
+    if any(arg in VERSION_FLAGS for arg in args):
+        return CliArgs(version=tool_version())
+    if not args:
+        return CliArgs()
+    if args[0] in HELP_FLAGS:
+        return CliArgs(show_help=True, help_text=render_main_help())
+    if args[0] == "help":
+        if len(args) > 1 and args[1] in COMMAND_DESCRIPTIONS:
+            return CliArgs(show_help=True, help_text=render_command_help(args[1]))
+        return CliArgs(show_help=True, help_text=render_main_help())
+    if args[0] not in COMMAND_DESCRIPTIONS or args[0] == "help":
+        return CliArgs(show_help=True, help_text=render_main_help())
+
+    command = args[0]
+    command_args = args[1:]
+    if any(arg in HELP_FLAGS for arg in command_args):
+        return CliArgs(command=command, show_help=True, help_text=render_command_help(command))
+
+    if command in RUN_COMMAND_MODES:
+        record_path, remaining = _split_record_option(command_args)
+        if remaining:
+            return CliArgs(command=command, show_help=True, help_text=render_command_help(command))
+        return CliArgs(command=command, mode=RUN_COMMAND_MODES[command], record_path=record_path)
+
+    if command == "replay":
+        if command_args == ["+list"]:
+            return CliArgs(command=command, replay_action="list")
+        if command_args == ["+clear"]:
+            return CliArgs(command=command, replay_action="clear")
+        if command_args and command_args[0].startswith("+"):
+            return CliArgs(command=command, show_help=True, help_text=render_command_help(command))
+        if len(command_args) > 1 or any(arg.startswith("-") for arg in command_args):
+            return CliArgs(command=command, show_help=True, help_text=render_command_help(command))
+        replay_path = command_args[0] if command_args else None
+        return CliArgs(command=command, replay_path=replay_path)
+
+    if command == "compete":
+        record_path, remaining = _split_record_option(command_args)
+        if len(remaining) > 1 or any(arg.startswith("-") for arg in remaining):
+            return CliArgs(command=command, show_help=True, help_text=render_command_help(command))
+        competition_path = remaining[0] if remaining else None
+        return CliArgs(
+            command=command,
+            mode="competitive",
+            record_path=record_path,
+            competition_path=competition_path,
+        )
+
+    return CliArgs(show_help=True, help_text=render_main_help())
+
+
 def game_mode_from_args(args: list[str]) -> str:
     """根据命令行参数返回运行模式名。"""
-    if is_competition_mode(args):
-        return "competitive"
-    if "--llm" in args:
-        return "llm"
-    if "--agent" in args:
-        return "agent"
-    return "manual"
+    return parse_cli_args(args).mode
 
 
 def is_competition_mode(args: list[str]) -> bool:
     """判断命令行参数是否请求竞技模式。"""
-    return (bool(args) and args[0] == "compete") or "--compete" in args
+    return parse_cli_args(args).command == "compete"
 
 
 def competition_source_path(args: list[str]) -> str | None:
     """从竞技模式参数中读取源 replay 路径；缺省时由 UI 菜单选择。"""
-    if "--compete" in args:
-        index = args.index("--compete")
-        if index + 1 < len(args) and not args[index + 1].startswith("-"):
-            return args[index + 1]
-        return None
-    if args and args[0] == "compete":
-        if len(args) > 1 and not args[1].startswith("-"):
-            return args[1]
-        return arg_value(args, "--replay")
-    return None
+    return parse_cli_args(args).competition_path
 
 
 def default_replay_path(mode: str, seed: int | None = None, directory: str = REPLAY_DIR) -> str:
@@ -789,6 +977,52 @@ def list_replay_files(directory: str = REPLAY_DIR) -> list[str]:
         if name.endswith(".json") and os.path.isfile(os.path.join(directory, name))
     ]
     return sorted(paths, key=lambda path: os.path.getmtime(path), reverse=True)
+
+
+def clear_replay_files(directory: str = REPLAY_DIR) -> int:
+    """删除 replay 目录下的所有 JSON 记录文件，返回删除数量。"""
+    removed = 0
+    for path in list_replay_files(directory):
+        os.remove(path)
+        removed += 1
+    return removed
+
+
+def replay_created_at(path) -> float:
+    """返回 replay 文件创建时间；不支持 birthtime 的平台退回 ctime。"""
+    stat = os.stat(path)
+    return getattr(stat, "st_birthtime", stat.st_ctime)
+
+
+def replay_metadata(path) -> dict:
+    """读取 replay 文件元信息，用于列表详情展示。"""
+    path = os.fspath(path)
+    data = load_replay_file(path)
+    return {
+        "path": path,
+        "mode": data.get("mode", "unknown"),
+        "frames": data.get("frames", 0),
+        "created_at": replay_created_at(path),
+        "competitive": bool(data.get("competitive", False)),
+        "source_replay": data.get("source_replay") or "-",
+    }
+
+
+def render_replay_metadata(metadata: dict) -> str:
+    """把 replay 元信息渲染成多行文本。"""
+    created_at = time.strftime(
+        "%Y-%m-%d %H:%M:%S",
+        time.localtime(metadata["created_at"]),
+    )
+    competitive = "是" if metadata["competitive"] else "否"
+    return "\n".join([
+        f"文件: {os.path.basename(metadata['path'])}",
+        f"模式: {metadata['mode']}",
+        f"帧数: {metadata['frames']}",
+        f"创建时间: {created_at}",
+        f"是否竞技模式: {competitive}",
+        f"竞技模式源记录: {metadata['source_replay']}",
+    ])
 
 
 def move_replay_selection(index: int, key: int, count: int) -> int:
@@ -861,6 +1095,103 @@ def select_replay_file(stdscr, paths: list[str]) -> str | None:
             return paths[index]
         if key in (ord("q"), ord("Q"), 27):
             return None
+        index = move_replay_selection(index, key, len(paths))
+
+
+def show_replay_metadata(stdscr, path: str):
+    """展示选中 replay 文件的元信息。"""
+    while True:
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+        try:
+            stdscr.addstr(1, 2, "Replay 元信息", curses.A_BOLD)
+        except curses.error:
+            pass
+
+        try:
+            lines = render_replay_metadata(replay_metadata(path)).splitlines()
+        except (OSError, json.JSONDecodeError) as exc:
+            lines = [f"无法读取 replay 文件: {exc}"]
+
+        for row, text in enumerate(lines):
+            if row + 3 >= h - 1:
+                break
+            try:
+                stdscr.addstr(row + 3, 2, text[:max(0, w - 4)])
+            except curses.error:
+                pass
+
+        hint = "Enter / Q 返回列表"
+        try:
+            stdscr.addstr(h - 1, 2, hint[:max(0, w - 4)], curses.A_DIM)
+        except curses.error:
+            pass
+        stdscr.refresh()
+
+        key = stdscr.getch()
+        if key in (10, 13, ord("q"), ord("Q"), 27):
+            return
+
+
+def browse_replay_files(stdscr, paths: list[str]):
+    """在 curses 中浏览 replay 文件，回车查看选中文件元信息。"""
+    curses.curs_set(0)
+    stdscr.keypad(True)
+    stdscr.nodelay(False)
+    index = 0
+
+    while True:
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+        try:
+            stdscr.addstr(1, 2, "Replay 记录列表", curses.A_BOLD)
+        except curses.error:
+            pass
+
+        if not paths:
+            msg = f"没有找到运行记录目录 {REPLAY_DIR}/ 下的 .json 文件"
+            hint = "按 Enter / Q 返回"
+            for y, text in ((3, msg), (5, hint)):
+                try:
+                    stdscr.addstr(y, 2, text[:max(0, w - 4)])
+                except curses.error:
+                    pass
+            stdscr.refresh()
+            key = stdscr.getch()
+            if key in (10, 13, ord("q"), ord("Q"), 27):
+                return
+            continue
+
+        visible_rows = max(1, h - 5)
+        start = min(max(0, index - visible_rows + 1), max(0, len(paths) - visible_rows))
+        for row, path in enumerate(paths[start:start + visible_rows]):
+            item_index = start + row
+            basename = os.path.basename(path)
+            mtime = time.strftime(
+                "%Y-%m-%d %H:%M:%S",
+                time.localtime(os.path.getmtime(path)),
+            )
+            marker = "> " if item_index == index else "  "
+            text = f"{marker}{basename}  {mtime}"
+            attr = curses.A_REVERSE if item_index == index else curses.A_NORMAL
+            try:
+                stdscr.addstr(3 + row, 2, text[:max(0, w - 4)], attr)
+            except curses.error:
+                pass
+
+        hint = "↑/↓ 选择 | Enter 查看元信息 | Q 退出"
+        try:
+            stdscr.addstr(h - 1, 2, hint[:max(0, w - 4)], curses.A_DIM)
+        except curses.error:
+            pass
+        stdscr.refresh()
+
+        key = stdscr.getch()
+        if key in (10, 13):
+            show_replay_metadata(stdscr, paths[index])
+            continue
+        if key in (ord("q"), ord("Q"), 27):
+            return
         index = move_replay_selection(index, key, len(paths))
 
 
@@ -1512,7 +1843,7 @@ def run_competition_loop(stdscr, renderer: Renderer, competition: CompetitionRun
         renderer.draw_competition(competition)
 
 
-def main(stdscr):
+def main(stdscr, cli_args: CliArgs | None = None):
     """游戏主循环
 
     每帧的执行顺序:
@@ -1524,23 +1855,26 @@ def main(stdscr):
       6. renderer.draw() 渲染画面
       7. 等待下一帧 (由 curses.timeout 控制)
     """
-    args = sys.argv[1:]
-    competition_mode = is_competition_mode(args)
-    competition_path = competition_source_path(args)
+    cli_args = cli_args or parse_cli_args(sys.argv[1:])
+    if cli_args.command == "replay" and cli_args.replay_action == "list":
+        browse_replay_files(stdscr, list_replay_files())
+        return
+
+    competition_mode = cli_args.command == "compete"
+    competition_path = cli_args.competition_path
     if competition_mode and not competition_path:
         competition_path = select_replay_file(stdscr, list_replay_files())
         if not competition_path:
             return
 
-    replay_subcommand = bool(args) and args[0] == "replay"
-    replay_path = arg_value(args, "--replay")
-    if replay_subcommand and not replay_path:
+    replay_path = cli_args.replay_path
+    if cli_args.command == "replay" and not replay_path:
         replay_path = select_replay_file(stdscr, list_replay_files())
         if not replay_path:
             return
 
     renderer = Renderer(stdscr)
-    record_path = arg_value(args, "--record")
+    record_path = cli_args.record_path
 
     if competition_mode:
         replay_player = ReplayPlayer.from_file(competition_path)
@@ -1557,7 +1891,7 @@ def main(stdscr):
         return
 
     replay_player = ReplayPlayer.from_file(replay_path) if replay_path else None
-    mode = game_mode_from_args(args)
+    mode = cli_args.mode
     run_index = 1
     if replay_player:
         game = DinoGame(rng=random.Random(replay_player.seed))
@@ -1574,7 +1908,7 @@ def main(stdscr):
 
     if replay_player:
         agent_name = "Replay"
-    elif "--llm" in args:
+    elif cli_args.mode == "llm":
         try:
             agent = LLMAgent()
             agent_name = "LLM Agent (Claude)"
@@ -1582,7 +1916,7 @@ def main(stdscr):
             # 没有 API key，降级到规则 Agent
             agent = RuleAgent()
             agent_name = "Rule Agent (no API key)"
-    elif "--agent" in args:
+    elif cli_args.mode == "agent":
         agent = RuleAgent()
         agent_name = "Rule Agent"
 
@@ -1665,23 +1999,18 @@ def main(stdscr):
 
 def cli():
     """Command-line entrypoint for the terminal dino game."""
-    print("=" * 50)
-    print("  🦕 Terminal Dino Runner")
-    print("=" * 50)
-    print()
-    print("  用法:")
-    print("    dino          手动玩")
-    print("    dino --agent  AI Agent 玩")
-    print("    dino --llm    Claude LLM 玩")
-    print("    dino replay   选择运行记录并重放")
-    print("    dino compete  选择运行记录并进入竞技模式")
-    print("    dino --record run.json  指定录制文件")
-    print("    dino --replay run.json  直接重放文件")
-    print("    dino --compete run.json  直接竞技指定记录")
-    print()
-    print("  启动中...")
-    time.sleep(0.5)
-    curses.wrapper(main)    # wrapper 自动处理 curses 初始化和清理
+    cli_args = parse_cli_args(sys.argv[1:])
+    if cli_args.version:
+        print(cli_args.version)
+        return
+    if cli_args.show_help:
+        print(cli_args.help_text)
+        return
+    if cli_args.command == "replay" and cli_args.replay_action == "clear":
+        removed = clear_replay_files()
+        print(f"已清除 {removed} 个 replay 记录文件")
+        return
+    curses.wrapper(main, cli_args)    # wrapper 自动处理 curses 初始化和清理
 
 
 if __name__ == "__main__":

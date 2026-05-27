@@ -41,10 +41,10 @@ compete:
 	$(DINO) compete
 
 agent:
-	$(DINO) --agent
+	$(DINO) agent
 
 llm:
-	$(DINO) --llm
+	$(DINO) llm
 
 clean:
 	rm -rf __pycache__ tests/__pycache__ *.egg-info build dist

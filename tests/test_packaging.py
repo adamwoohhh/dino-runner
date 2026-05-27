@@ -59,6 +59,81 @@ class PackagingTest(unittest.TestCase):
         self.assertNotIn("python3 -m pip install build twine", contributing)
 
 
+class CliContractTest(unittest.TestCase):
+    def dino_game(self):
+        return importlib.import_module("dino_game")
+
+    def test_main_help_groups_subcommands_and_public_options(self):
+        dino_game = self.dino_game()
+
+        help_text = dino_game.render_main_help()
+
+        self.assertIn("Usage: dino <command> [options]", help_text)
+        self.assertIn("Core", help_text)
+        self.assertIn("play", help_text)
+        self.assertIn("Start a manual game", help_text)
+        self.assertIn("Replay", help_text)
+        self.assertIn("replay", help_text)
+        self.assertIn("Play, inspect, or clear replay records", help_text)
+        self.assertIn("Competition", help_text)
+        self.assertIn("Help", help_text)
+        self.assertIn("help", help_text)
+        self.assertIn("--help, -H", help_text)
+        self.assertIn("--version, -V", help_text)
+        self.assertNotIn("--record", help_text)
+        self.assertNotIn("--agent", help_text)
+        self.assertNotRegex(help_text, r"[\u4e00-\u9fff]")
+        self.assertLess(help_text.index("play"), help_text.index("agent"))
+        self.assertLess(help_text.index("Replay"), help_text.index("Competition"))
+        self.assertLess(help_text.index("Competition"), help_text.index("Help"))
+
+    def test_subcommand_help_includes_command_specific_arguments(self):
+        dino_game = self.dino_game()
+
+        play_help = dino_game.render_command_help("play")
+        replay_help = dino_game.render_command_help("replay")
+        compete_help = dino_game.render_command_help("compete")
+
+        self.assertIn("Usage: dino play [--record FILE]", play_help)
+        self.assertIn("--record FILE", play_help)
+        self.assertIn("Usage: dino replay [FILE]", replay_help)
+        self.assertIn("dino replay +list", replay_help)
+        self.assertIn("dino replay +clear", replay_help)
+        self.assertIn("FILE", replay_help)
+        self.assertIn("Usage: dino compete [FILE] [--record FILE]", compete_help)
+        self.assertIn("--record FILE", compete_help)
+        self.assertNotRegex(play_help + replay_help + compete_help, r"[\u4e00-\u9fff]")
+
+    def test_parse_cli_args_uses_new_subcommands_only(self):
+        dino_game = self.dino_game()
+
+        self.assertEqual(dino_game.parse_cli_args([]).command, "play")
+        self.assertEqual(dino_game.parse_cli_args(["play"]).mode, "manual")
+        self.assertEqual(dino_game.parse_cli_args(["agent"]).mode, "agent")
+        self.assertEqual(dino_game.parse_cli_args(["llm"]).mode, "llm")
+        self.assertEqual(dino_game.parse_cli_args(["replay", "run.json"]).replay_path, "run.json")
+        self.assertEqual(dino_game.parse_cli_args(["replay", "+list"]).replay_action, "list")
+        self.assertEqual(dino_game.parse_cli_args(["replay", "+clear"]).replay_action, "clear")
+        self.assertTrue(dino_game.parse_cli_args(["replay", "+unknown"]).show_help)
+        self.assertEqual(dino_game.parse_cli_args(["compete", "run.json"]).competition_path, "run.json")
+        self.assertEqual(dino_game.parse_cli_args(["play", "--record", "run.json"]).record_path, "run.json")
+        self.assertTrue(dino_game.parse_cli_args(["--agent"]).show_help)
+        self.assertTrue(dino_game.parse_cli_args(["--replay", "run.json"]).show_help)
+
+    def test_help_flags_work_after_subcommands_and_unknown_falls_back_to_help(self):
+        dino_game = self.dino_game()
+
+        self.assertEqual(dino_game.parse_cli_args(["help"]).help_text, dino_game.render_main_help())
+        self.assertEqual(dino_game.parse_cli_args(["agent", "-H"]).help_text, dino_game.render_command_help("agent"))
+        self.assertEqual(dino_game.parse_cli_args(["foo"]).help_text, dino_game.render_main_help())
+
+    def test_version_flags_return_project_version(self):
+        dino_game = self.dino_game()
+
+        self.assertEqual(dino_game.parse_cli_args(["--version"]).version, "0.1.0")
+        self.assertEqual(dino_game.parse_cli_args(["play", "-V"]).version, "0.1.0")
+
+
 class GameTuningTest(unittest.TestCase):
     def test_jump_arc_returns_to_ground_in_chrome_like_window(self):
         dino_game = importlib.import_module("dino_game")
@@ -671,6 +746,45 @@ class ReplayTest(unittest.TestCase):
                 [str(new_path), str(old_path)],
             )
 
+    def test_clear_replay_files_removes_only_replay_json_files(self):
+        dino_game = importlib.import_module("dino_game")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            replay_path = pathlib.Path(tmpdir) / "run.json"
+            notes_path = pathlib.Path(tmpdir) / "notes.txt"
+            replay_path.write_text("{}")
+            notes_path.write_text("keep")
+
+            removed = dino_game.clear_replay_files(tmpdir)
+
+            self.assertEqual(removed, 1)
+            self.assertFalse(replay_path.exists())
+            self.assertTrue(notes_path.exists())
+
+    def test_replay_metadata_reports_mode_frames_creation_and_competition_source(self):
+        dino_game = importlib.import_module("dino_game")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            replay_path = pathlib.Path(tmpdir) / "competition.json"
+            replay_path.write_text(
+                '{"version": 3, "seed": 99, "mode": "competitive", "frames": 12, '
+                '"competitive": true, "source_replay": "replays/source.json", '
+                '"actions": [], "obstacles": []}'
+            )
+
+            metadata = dino_game.replay_metadata(replay_path)
+            lines = dino_game.render_replay_metadata(metadata)
+
+            self.assertEqual(metadata["mode"], "competitive")
+            self.assertEqual(metadata["frames"], 12)
+            self.assertEqual(metadata["competitive"], True)
+            self.assertEqual(metadata["source_replay"], "replays/source.json")
+            self.assertIn("模式: competitive", lines)
+            self.assertIn("帧数: 12", lines)
+            self.assertIn("是否竞技模式: 是", lines)
+            self.assertIn("竞技模式源记录: replays/source.json", lines)
+            self.assertIn("创建时间:", lines)
+
     def test_move_replay_selection_wraps_with_arrow_keys(self):
         dino_game = importlib.import_module("dino_game")
 
@@ -682,22 +796,20 @@ class ReplayTest(unittest.TestCase):
         dino_game = importlib.import_module("dino_game")
 
         self.assertEqual(dino_game.game_mode_from_args([]), "manual")
-        self.assertEqual(dino_game.game_mode_from_args(["--agent"]), "agent")
-        self.assertEqual(dino_game.game_mode_from_args(["--llm"]), "llm")
+        self.assertEqual(dino_game.game_mode_from_args(["play"]), "manual")
+        self.assertEqual(dino_game.game_mode_from_args(["agent"]), "agent")
+        self.assertEqual(dino_game.game_mode_from_args(["llm"]), "llm")
         self.assertEqual(dino_game.game_mode_from_args(["compete"]), "competitive")
 
-    def test_competition_source_path_accepts_flag_and_positional_arg(self):
+    def test_competition_source_path_accepts_positional_arg_only(self):
         dino_game = importlib.import_module("dino_game")
 
-        self.assertEqual(
-            dino_game.competition_source_path(["--compete", "run.json"]),
-            "run.json",
-        )
         self.assertEqual(
             dino_game.competition_source_path(["compete", "run.json"]),
             "run.json",
         )
         self.assertIsNone(dino_game.competition_source_path(["compete"]))
+        self.assertIsNone(dino_game.competition_source_path(["--compete", "run.json"]))
 
     def test_replay_seed_and_actions_are_deterministic(self):
         dino_game = importlib.import_module("dino_game")
