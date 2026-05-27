@@ -67,6 +67,7 @@ python3 dino_game.py --replay run.json
 `20260527-153012-manual-123456.json`，其中包含运行模式 `manual`、`agent`
 或 `llm`。Replay 文件是 JSON，包含随机种子、运行模式、总帧数、`actions` 和 `obstacles`；
 两组数据都使用 `{"frame": number, "action": ...}` 结构，`actions` 不记录 `none` 帧。重放时按记录数据推进游戏，不再依赖随机生成障碍物。
+每局只在 Game Over 时写入一个 replay 文件；同一进程内按 `R` 重开会为新局创建新文件。未结束时按 `Q` 或用 `Ctrl+C` 退出不会保存未完成的 replay。
 
 ## 操控
 

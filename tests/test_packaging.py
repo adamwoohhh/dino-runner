@@ -540,6 +540,54 @@ class ReplayTest(unittest.TestCase):
         self.assertIn("-manual-", pathlib.Path(path).name)
         self.assertTrue(path.endswith(".json"))
 
+    def test_explicit_record_path_adds_run_suffix_after_first_game(self):
+        dino_game = importlib.import_module("dino_game")
+
+        self.assertEqual(
+            dino_game.record_path_for_run("run.json", "manual", 123, 1),
+            "run.json",
+        )
+        self.assertEqual(
+            dino_game.record_path_for_run("run.json", "manual", 123, 2),
+            "run-2.json",
+        )
+
+    def test_finish_recording_saves_once_at_game_over(self):
+        dino_game = importlib.import_module("dino_game")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = pathlib.Path(tmpdir) / "run.json"
+            recorder = dino_game.ReplayRecorder(path, seed=123, mode="manual")
+
+            dino_game.finish_recording(recorder)
+            dino_game.finish_recording(recorder)
+
+            data = dino_game.load_replay_file(path)
+            self.assertEqual(data["seed"], 123)
+
+    def test_start_recording_run_creates_new_default_file_per_game(self):
+        dino_game = importlib.import_module("dino_game")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _, first = dino_game.start_recording_run(
+                "manual",
+                None,
+                1,
+                directory=tmpdir,
+                seed=111,
+            )
+            _, second = dino_game.start_recording_run(
+                "manual",
+                None,
+                2,
+                directory=tmpdir,
+                seed=222,
+            )
+
+            self.assertNotEqual(first.path, second.path)
+            self.assertIn("-manual-", pathlib.Path(first.path).name)
+            self.assertIn("-manual-", pathlib.Path(second.path).name)
+
     def test_list_replay_files_returns_json_files_newest_first(self):
         dino_game = importlib.import_module("dino_game")
 

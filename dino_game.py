@@ -733,6 +733,21 @@ def default_replay_path(mode: str, seed: int | None = None, directory: str = REP
     return os.path.join(directory, f"{timestamp}-{mode}-{suffix}.json")
 
 
+def record_path_for_run(
+        record_path: str | None,
+        mode: str,
+        seed: int,
+        run_index: int,
+        directory: str = REPLAY_DIR) -> str:
+    """返回某一局要写入的 replay 文件路径。"""
+    if not record_path:
+        return default_replay_path(mode, seed, directory)
+    if run_index <= 1:
+        return record_path
+    root, ext = os.path.splitext(record_path)
+    return f"{root}-{run_index}{ext or '.json'}"
+
+
 def list_replay_files(directory: str = REPLAY_DIR) -> list[str]:
     """列出 replay JSON 文件，按最近修改时间倒序。"""
     if not os.path.isdir(directory):
@@ -854,6 +869,7 @@ class ReplayRecorder:
         self.obstacles: list[dict] = []
         self.frames = 0
         self.input_count = 0
+        self.saved = False
 
     def record(self, action: str):
         self.record_action(self.input_count + 1, action)
@@ -878,6 +894,8 @@ class ReplayRecorder:
         })
 
     def save(self):
+        if self.saved:
+            return
         data = {
             "version": 3,
             "seed": self.seed,
@@ -891,6 +909,7 @@ class ReplayRecorder:
             os.makedirs(directory, exist_ok=True)
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+        self.saved = True
 
 
 class ReplayPlayer:
@@ -1027,6 +1046,27 @@ def arg_value(args: list[str], flag: str) -> str | None:
     if index + 1 >= len(args):
         raise ValueError(f"{flag} 需要一个文件路径")
     return args[index + 1]
+
+
+def start_recording_run(
+        mode: str,
+        record_path: str | None,
+        run_index: int,
+        directory: str = REPLAY_DIR,
+        seed: int | None = None) -> tuple[DinoGame, ReplayRecorder]:
+    """启动一局新游戏，并为这一局创建独立 replay recorder。"""
+    if seed is None:
+        seed = time.time_ns()
+    random.seed(seed)
+    game = DinoGame()
+    path = record_path_for_run(record_path, mode, seed, run_index, directory)
+    return game, ReplayRecorder(path, seed, mode=mode)
+
+
+def finish_recording(recorder: ReplayRecorder | None):
+    """Game Over 时保存当前局；重复调用不会重复写。"""
+    if recorder:
+        recorder.save()
 
 
 def footer_hint(agent_name: str, speed: float) -> str:
@@ -1214,7 +1254,7 @@ def main(stdscr):
 
     每帧的执行顺序:
       1. 读取键盘输入 (curses.getch)
-      2. 处理全局按键 (Q/A)
+      2. 处理全局按键 (Q)
       3. 如果 Game Over → 等待重启
       4. Agent 决策 或 人类输入
       5. game.update() 推进一帧
@@ -1229,19 +1269,17 @@ def main(stdscr):
         if not replay_path:
             return
 
-    record_path = arg_value(args, "--record")
     replay_player = ReplayPlayer.from_file(replay_path) if replay_path else None
-    seed = replay_player.seed if replay_player else time.time_ns()
-    random.seed(seed)
+    record_path = arg_value(args, "--record")
     mode = game_mode_from_args(args)
+    run_index = 1
     if replay_player:
-        recorder = ReplayRecorder(record_path, seed, mode="replay") if record_path else None
+        random.seed(replay_player.seed)
+        game = DinoGame()
+        recorder = None
     else:
-        if not record_path:
-            record_path = default_replay_path(mode, seed)
-        recorder = ReplayRecorder(record_path, seed, mode=mode)
+        game, recorder = start_recording_run(mode, record_path, run_index)
 
-    game = DinoGame()
     renderer = Renderer(stdscr)
     manual_input = ManualInputState()
     event_frame = 0
@@ -1286,10 +1324,10 @@ def main(stdscr):
                     continue
 
                 if should_reset_after_game_over(key, agent_active=bool(agent)):
-                    event_frame += 1
-                    game.reset()
-                    if recorder:
-                        recorder.record_action(event_frame, "reset")
+                    run_index += 1
+                    game, recorder = start_recording_run(mode, record_path, run_index)
+                    manual_input = ManualInputState()
+                    event_frame = 0
                 renderer.draw(game, agent_name)
                 continue
 
@@ -1330,10 +1368,11 @@ def main(stdscr):
                 if recorder:
                     for obstacle in spawned_obstacles:
                         recorder.record_obstacle(event_frame, obstacle)
+                    if game.game_over:
+                        finish_recording(recorder)
             renderer.draw(game, agent_name)
-    finally:
-        if recorder:
-            recorder.save()
+    except KeyboardInterrupt:
+        return
 
 
 # ═══════════════════════════════════════════════════════════════════════
