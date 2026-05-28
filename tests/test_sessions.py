@@ -7,19 +7,25 @@ from dino_game.cli import CliArgs
 
 
 class SessionsTest(unittest.TestCase):
+    class FakeScreen:
+        def __init__(self, keys=None):
+            self.keys = list(keys or [])
+            self.nodelay_calls = []
+            self.timeout_calls = []
+
+        def nodelay(self, value):
+            self.nodelay_calls.append(value)
+
+        def timeout(self, value):
+            self.timeout_calls.append(value)
+
+        def getch(self):
+            if self.keys:
+                return self.keys.pop(0)
+            return ord("q")
+
     def test_replay_selection_restores_nonblocking_game_input_before_playback(self):
-        class FakeScreen:
-            def __init__(self):
-                self.nodelay_calls = []
-                self.timeout_calls = []
-
-            def nodelay(self, value):
-                self.nodelay_calls.append(value)
-
-            def timeout(self, value):
-                self.timeout_calls.append(value)
-
-        stdscr = FakeScreen()
+        stdscr = self.FakeScreen()
         cli_args = CliArgs(command="replay")
 
         def select_replay_file(screen, paths):
@@ -41,6 +47,51 @@ class SessionsTest(unittest.TestCase):
         self.assertIsInstance(session, sessions.ReplaySession)
         self.assertEqual(stdscr.nodelay_calls[-1], True)
         self.assertEqual(stdscr.timeout_calls[-1], dino_game.FRAME_MS)
+
+    def test_competition_selection_restores_nonblocking_game_input_before_playback(self):
+        stdscr = self.FakeScreen()
+        cli_args = CliArgs(command="compete")
+
+        def select_replay_file(screen, paths):
+            screen.nodelay(False)
+            return "run.json"
+
+        with (
+            mock.patch("dino_game.sessions.Renderer") as renderer_class,
+            mock.patch("dino_game.sessions.list_replay_files", return_value=["run.json"]),
+            mock.patch("dino_game.sessions.select_replay_file", side_effect=select_replay_file),
+            mock.patch(
+                "dino_game.sessions.ReplayPlayer.from_file",
+                return_value=dino_game.ReplayPlayer(seed=123, actions=[], obstacles=[]),
+            ),
+        ):
+            renderer_class.return_value = mock.Mock()
+            session = sessions.session_for_cli_args(stdscr, cli_args)
+
+        self.assertIsInstance(session, sessions.CompetitionSession)
+        self.assertEqual(stdscr.nodelay_calls[-1], True)
+        self.assertEqual(stdscr.timeout_calls[-1], dino_game.FRAME_MS)
+
+    def test_replay_session_run_advances_frames_without_keypress(self):
+        stdscr = self.FakeScreen(keys=[-1, -1, ord("q")])
+        renderer = mock.Mock()
+        replay_player = dino_game.ReplayPlayer(
+            seed=123,
+            actions=[{"frame": 1, "action": {"value": "jump"}}],
+            obstacles=[],
+            frames=2,
+        )
+        session = sessions.ReplaySession(
+            stdscr=stdscr,
+            renderer=renderer,
+            cli_args=CliArgs(command="replay", mode="manual"),
+            replay_player=replay_player,
+        )
+
+        session.run()
+
+        self.assertEqual(session.event_frame, 2)
+        self.assertGreaterEqual(renderer.draw.call_count, 2)
 
     def test_replay_list_command_uses_replay_list_session_without_renderer(self):
         stdscr = object()
@@ -182,6 +233,31 @@ class SessionsTest(unittest.TestCase):
             cached_frames_view=session.agent.cached_frame_window(session.event_frame + 1),
             game_over_save_status=None,
             game_over_retry_available=False,
+        )
+
+    def test_llm_game_over_disables_lifeline_after_replay_is_saved(self):
+        renderer = mock.Mock()
+        config = dino_game.LLMConfig("key", "https://example.test/v1", "model")
+        session = sessions.AgentSession(
+            stdscr=mock.Mock(),
+            renderer=renderer,
+            cli_args=CliArgs(command="play", mode="llm", llm_config=config),
+        )
+        session.recorder = mock.Mock()
+        session.game.game_over = True
+        session.game_over_save_status = "unsaved"
+
+        with mock.patch("dino_game.sessions.finish_recording"):
+            session._handle_game_over(ord("s"))
+        session._handle_game_over(ord("c"))
+
+        self.assertEqual(session.game_over_save_status, "saved")
+        self.assertEqual(session.llm_lifeline_state, "idle")
+        renderer.draw.assert_called_with(
+            session.game,
+            session.agent_name,
+            cached_frames_view=None,
+            game_over_save_status="saved",
         )
 
     def test_llm_lifeline_waits_for_new_plan_after_rewind_animation(self):

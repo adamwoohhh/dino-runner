@@ -285,6 +285,82 @@ class ReplayTest(unittest.TestCase):
         self.assertEqual(dino_game.move_replay_selection(0, dino_game.curses.KEY_UP, 3), 2)
         self.assertEqual(dino_game.move_replay_selection(2, dino_game.curses.KEY_DOWN, 3), 0)
 
+    def test_browse_replay_files_opens_metadata_then_returns_on_q(self):
+        dino_game = importlib.import_module("dino_game")
+
+        class FakeScreen:
+            def __init__(self):
+                self.keys = [10, ord("q")]
+                self.nodelay_calls = []
+
+            def keypad(self, value):
+                pass
+
+            def nodelay(self, value):
+                self.nodelay_calls.append(value)
+
+            def erase(self):
+                pass
+
+            def getmaxyx(self):
+                return (24, 100)
+
+            def addstr(self, *args):
+                pass
+
+            def refresh(self):
+                pass
+
+            def getch(self):
+                return self.keys.pop(0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            replay_path = pathlib.Path(tmpdir) / "run.json"
+            replay_path.write_text(
+                '{"version": 3, "seed": 1, "mode": "manual", '
+                '"frames": 0, "actions": [], "obstacles": []}'
+            )
+            screen = FakeScreen()
+            with (
+                mock.patch.object(dino_game.curses, "curs_set"),
+                mock.patch("dino_game.replay.show_replay_metadata") as show_metadata,
+            ):
+                dino_game.browse_replay_files(screen, [str(replay_path)])
+
+        self.assertEqual(screen.nodelay_calls, [False])
+        show_metadata.assert_called_once_with(screen, str(replay_path))
+
+    def test_browse_replay_files_empty_list_returns_on_enter(self):
+        dino_game = importlib.import_module("dino_game")
+
+        class FakeScreen:
+            def __init__(self):
+                self.keys = [10]
+
+            def keypad(self, value):
+                pass
+
+            def nodelay(self, value):
+                pass
+
+            def erase(self):
+                pass
+
+            def getmaxyx(self):
+                return (24, 100)
+
+            def addstr(self, *args):
+                pass
+
+            def refresh(self):
+                pass
+
+            def getch(self):
+                return self.keys.pop(0)
+
+        with mock.patch.object(dino_game.curses, "curs_set"):
+            dino_game.browse_replay_files(FakeScreen(), [])
+
     def test_game_mode_from_args_tracks_manual_agent_and_llm(self):
         dino_game = importlib.import_module("dino_game")
 

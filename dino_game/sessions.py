@@ -359,6 +359,7 @@ class PlaySession:
             and isinstance(self.agent, LLMAgent)
             and not self.replay_player
             and self.llm_lifeline_state == "idle"
+            and self.game_over_save_status != "saved"
         )
 
     def _advance_llm_lifeline(self, next_frame: int) -> bool:
