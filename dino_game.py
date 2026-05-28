@@ -61,9 +61,9 @@ FRAME_MS = 1000 // FPS    # 每帧毫秒数，传给 curses.timeout()
 GROUND_ROW = 18           # 地面在终端的第几行（从上往下数）
 DINO_COL = 8              # 恐龙固定在屏幕左侧第 8 列
 NORMAL_OBSTACLE_SPAWN_X = 82
-LLM_OBSTACLE_SPAWN_X = 1250
+LLM_FORECAST_MAX_X = 1250
 NORMAL_STATE_LOOKAHEAD = NORMAL_OBSTACLE_SPAWN_X - DINO_COL + 10
-LLM_STATE_LOOKAHEAD = LLM_OBSTACLE_SPAWN_X - DINO_COL + 10
+LLM_STATE_LOOKAHEAD = LLM_FORECAST_MAX_X - DINO_COL + 10
 
 JUMP_VELOCITY = -1.75     # 起跳初速度（负值 = 向上）
 GRAVITY = 0.22            # 每帧施加的重力加速度
@@ -89,8 +89,11 @@ VERSION = "0.1.0"
 PAUSE_COUNTDOWN_SECONDS = 3
 LLM_ACTION_WINDOW_SECONDS = 10
 LLM_ACTION_WINDOW_FRAMES = FPS * LLM_ACTION_WINDOW_SECONDS
-LLM_PREFETCH_THRESHOLD_FRAMES = 20
+# LLM calls can take longer than a short gameplay buffer; start the next
+# window as soon as the previous one is available.
+LLM_PREFETCH_THRESHOLD_FRAMES = LLM_ACTION_WINDOW_FRAMES
 LLM_FALLBACK_WINDOW_FRAMES = 12
+LLM_LOADING_TEXT = "Dino is thinking seriously..."
 LLM_HORIZONTAL_OVERLAP_DISTANCE = 6.0
 LLM_RECOMMENDED_JUMP_EARLY_FRAMES = 14
 LLM_RECOMMENDED_JUMP_LATE_FRAMES = 2
@@ -321,6 +324,29 @@ class Obstacle:
         return [(left, right, bottom, top)]
 
 
+def random_obstacle_for_score(score: int, x: float, rng=random) -> Obstacle:
+    """Create a random obstacle for a score without mutating game state."""
+    if score < 200:
+        kinds = ["cactus_group", "cactus_group", "cactus_group"]
+    elif score < 500:
+        kinds = ["cactus_group", "cactus_group", "cactus_group", "bird"]
+    else:
+        kinds = ["cactus_group", "cactus_group", "cactus_group", "bird", "bird"]
+
+    kind = rng.choice(kinds)
+    height = 0
+    if kind == "bird":
+        height = rng.choice([0, 4, 8])
+
+    return Obstacle(
+        kind,
+        x,
+        height,
+        difficulty=difficulty_for_score(score),
+        rng=rng,
+    )
+
+
 class DinoGame:
     """游戏引擎 — 管理所有游戏状态和物理模拟
 
@@ -373,7 +399,11 @@ class DinoGame:
             # 空中且仍在上升阶段 → 反转并放大速度，快速下落
             self.dino_vy = max(abs(self.dino_vy) * SPEED_DROP_MULTIPLIER, 1.0)
 
-    def get_state(self, max_obstacle_distance: float = NORMAL_STATE_LOOKAHEAD) -> dict:
+    def get_state(
+            self,
+            max_obstacle_distance: float = NORMAL_STATE_LOOKAHEAD,
+            obstacles: list[Obstacle] | None = None,
+            max_obstacle_count: int | None = 3) -> dict:
         """导出当前游戏状态的结构化快照 — Agent 的「眼睛」
 
         这是 Agent 与游戏交互的核心接口。Agent 通过这个方法
@@ -397,19 +427,24 @@ class DinoGame:
             }
         """
         nearest = []
-        for obs in sorted(self.obstacles, key=lambda o: o.x):
+        source_obstacles = self.obstacles if obstacles is None else obstacles
+        for obs in sorted(source_obstacles, key=lambda o: o.x):
             distance = obs.x - DINO_COL
             # 只返回还没完全飞过恐龙的障碍物
             if obs.x + obs.width > DINO_COL - 2 and distance <= max_obstacle_distance:
-                nearest.append({
+                item = {
                     "kind": obs.kind,
                     "x": round(obs.x, 1),
                     "distance": round(distance, 1),
                     "height": obs.height,
                     "width": obs.width,
                     "h": obs.h,
-                })
-                if len(nearest) >= 3:
+                }
+                if hasattr(obs, "forecast_frame"):
+                    item["frame"] = obs.forecast_frame
+                    item["forecast"] = True
+                nearest.append(item)
+                if max_obstacle_count is not None and len(nearest) >= max_obstacle_count:
                     break
 
         return {
@@ -424,7 +459,55 @@ class DinoGame:
 
     def get_llm_state(self) -> dict:
         """导出 LLM 使用的更大前视窗口状态。"""
-        return self.get_state(max_obstacle_distance=LLM_STATE_LOOKAHEAD)
+        obstacles = self.obstacles + self.forecast_future_obstacles()
+        return self.get_state(
+            max_obstacle_distance=LLM_STATE_LOOKAHEAD,
+            obstacles=obstacles,
+            max_obstacle_count=None,
+        )
+
+    def _clone_rng(self):
+        if not hasattr(self.rng, "getstate") or not hasattr(self.rng, "setstate"):
+            return None
+        clone = random.Random()
+        clone.setstate(self.rng.getstate())
+        return clone
+
+    def forecast_future_obstacles(
+            self,
+            max_x: float = LLM_FORECAST_MAX_X) -> list[Obstacle]:
+        """Predict future obstacle spawns for LLM vision without mutating game state."""
+        forecast_rng = self._clone_rng()
+        if forecast_rng is None:
+            return []
+
+        forecasts: list[Obstacle] = []
+        score = self.score
+        speed = self.speed
+        spawn_timer = self.spawn_timer
+        travelled = 0.0
+        max_travel = max(0.0, max_x - NORMAL_OBSTACLE_SPAWN_X)
+
+        while travelled <= max_travel:
+            score += 1
+            speed = min(MAX_SPEED, INITIAL_SPEED + score * SPEED_ACCELERATION)
+            travelled += speed
+            spawn_timer -= speed
+
+            if spawn_timer <= 0:
+                obstacle = random_obstacle_for_score(
+                    score,
+                    NORMAL_OBSTACLE_SPAWN_X + travelled,
+                    forecast_rng,
+                )
+                obstacle.forecast_frame = self.frame + (score - self.score)
+                forecasts.append(obstacle)
+                spawn_timer = forecast_rng.randint(SPAWN_MIN, SPAWN_MAX)
+
+            if forecast_rng.random() < 0.02:
+                forecast_rng.randint(2, 8)
+
+        return forecasts
 
     def update(self, replay_obstacles: list[dict] | None = None) -> list[Obstacle]:
         """推进一帧游戏逻辑 — 每帧调用一次
@@ -521,28 +604,10 @@ class DinoGame:
           - 200~500: 加入鸟
           - 500+:    鸟出现更频繁
         """
-        if self.score < 200:
-            kinds = ["cactus_group", "cactus_group", "cactus_group"]
-        elif self.score < 500:
-            kinds = ["cactus_group", "cactus_group", "cactus_group", "bird"]
-        else:
-            kinds = ["cactus_group", "cactus_group", "cactus_group", "bird", "bird"]
-
-        kind = self.rng.choice(kinds)
-        height = 0
-        if kind == "bird":
-            # 鸟有三种飞行高度:
-            #   0 = 贴地（必须跳过）
-            #   4 = 中空（站着就能过，也可蹲）
-            #   8 = 高空（完全不用管）
-            height = self.rng.choice([0, 4, 8])
-
-        obstacle = Obstacle(
-            kind,
+        obstacle = random_obstacle_for_score(
+            self.score,
             self.obstacle_spawn_x,
-            height,
-            difficulty=difficulty_for_score(self.score),
-            rng=self.rng,
+            self.rng,
         )
         self.obstacles.append(obstacle)
         return obstacle
@@ -879,6 +944,14 @@ def estimate_frames_until_horizontal_overlap(distance: float, speed: float) -> i
     return math.ceil(target_distance / max(speed, 0.1))
 
 
+def estimate_horizontal_clearance_frames(width: float, speed: float) -> int:
+    """Estimate extra frames until the obstacle tail leaves the collision band."""
+    trailing_width = max(0.0, width - 1.0)
+    if trailing_width <= 0:
+        return 0
+    return math.ceil(trailing_width / max(speed, 0.1))
+
+
 def llm_planning_guidance(state: dict, current_frame: int) -> str:
     """Build prompt guidance from local physics and obstacle timing estimates."""
     jump_frames, max_jump_height = jump_physics_summary()
@@ -899,9 +972,13 @@ def llm_planning_guidance(state: dict, current_frame: int) -> str:
             f"{LLM_HORIZONTAL_OVERLAP_DISTANCE:g} 左右开始，不是 distance=0。"
         ),
         (
-            "- 地面障碍或低空鸟不要过早起跳；推荐在 estimated_overlap_frame "
-            f"前 {LLM_RECOMMENDED_JUMP_EARLY_FRAMES} 到 "
-            f"{LLM_RECOMMENDED_JUMP_LATE_FRAMES} 帧之间起跳。"
+            "- 宽障碍物会让水平重叠持续到 estimated_clear_frame；"
+            "recommended_jump_start 会随 width 变大而后移，避免过早下落。"
+        ),
+        (
+            "- 地面障碍或低空鸟不要过早起跳；推荐窗口大致覆盖 "
+            f"estimated_clear_frame 前 {LLM_RECOMMENDED_JUMP_EARLY_FRAMES} 帧"
+            f"到 estimated_overlap_frame 前 {LLM_RECOMMENDED_JUMP_LATE_FRAMES} 帧。"
         ),
         "- 中空鸟 height=4 优先 duck；高空鸟 height=8 通常 none。",
         "推荐起跳窗口估算:",
@@ -916,6 +993,19 @@ def llm_planning_guidance(state: dict, current_frame: int) -> str:
         distance = float(obstacle.get("distance", 0.0))
         frames_until_overlap = estimate_frames_until_horizontal_overlap(distance, speed)
         overlap_frame = current_frame + frames_until_overlap
+        overlap_speed = min(
+            MAX_SPEED,
+            speed + SPEED_ACCELERATION * frames_until_overlap,
+        )
+        raw_width = obstacle.get("width", 1.0)
+        try:
+            width = max(1.0, float(raw_width))
+            width_text = f", width={width:g}"
+        except (TypeError, ValueError):
+            width = 1.0
+            width_text = ""
+        clearance_frames = estimate_horizontal_clearance_frames(width, overlap_speed)
+        clear_frame = overlap_frame + clearance_frames
         kind = obstacle.get("kind", "unknown")
         height = obstacle.get("height", 0)
         if kind == "bird" and height == 4:
@@ -923,11 +1013,23 @@ def llm_planning_guidance(state: dict, current_frame: int) -> str:
         elif kind == "bird" and height == 8:
             recommendation = "recommended_action=none"
         else:
-            jump_start = overlap_frame - LLM_RECOMMENDED_JUMP_EARLY_FRAMES
+            width_shift = clearance_frames
+            if clearance_frames > 0:
+                width_shift += 1
+            jump_start = (
+                overlap_frame
+                - LLM_RECOMMENDED_JUMP_EARLY_FRAMES
+                + width_shift
+            )
             jump_end = overlap_frame - LLM_RECOMMENDED_JUMP_LATE_FRAMES
-            recommendation = f"recommended_jump_start={jump_start}-{jump_end}"
+            if jump_start > jump_end:
+                jump_start = jump_end
+            recommendation = (
+                f"estimated_clear_frame={clear_frame}, "
+                f"recommended_jump_start={jump_start}-{jump_end}"
+            )
         lines.append(
-            f"- obstacle#{index}: kind={kind}, distance={distance:g}, "
+            f"- obstacle#{index}: kind={kind}, distance={distance:g}{width_text}, "
             f"estimated_overlap_frame={overlap_frame}, {recommendation}"
         )
     return "\n".join(lines)
@@ -936,6 +1038,25 @@ def llm_planning_guidance(state: dict, current_frame: int) -> str:
 def llm_state_has_obstacles(state: dict) -> bool:
     """Return whether an LLM request state contains any obstacle information."""
     return bool(state.get("obstacles"))
+
+
+def format_frame_ranges(frames: list[int]) -> str | None:
+    """Return a compact frame range summary for display."""
+    if not frames:
+        return None
+    ranges = []
+    start = previous = frames[0]
+    for frame in frames[1:]:
+        if frame == previous + 1:
+            previous = frame
+            continue
+        ranges.append((start, previous))
+        start = previous = frame
+    ranges.append((start, previous))
+    return ", ".join(
+        str(start) if start == end else f"{start}-{end}"
+        for start, end in ranges
+    )
 
 
 class LLMAgent:
@@ -1101,6 +1222,14 @@ height 表示障碍物的高度(鸟)，0=低空，4=中空，8=高空。
         with self.lock:
             return frame not in self.planned_actions
 
+    def cached_frame_summary(self) -> str | None:
+        with self.lock:
+            frames = sorted(self.planned_actions)
+        ranges = format_frame_ranges(frames)
+        if ranges is None:
+            return None
+        return f"Cached frames: {ranges} ({len(frames)})"
+
     def reset_plan(self):
         with self.lock:
             self.planned_actions.clear()
@@ -1155,6 +1284,12 @@ height 表示障碍物的高度(鸟)，0=低空，4=中空，8=高空。
                     self.planned_actions.pop(old_frame, None)
 
         return action
+
+
+def cached_frames_text_for_agent(agent) -> str | None:
+    if isinstance(agent, LLMAgent):
+        return agent.cached_frame_summary()
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2054,12 +2189,10 @@ def start_recording_run(
     """启动一局新游戏，并为这一局创建独立 replay recorder。"""
     if seed is None:
         seed = time.time_ns()
-    obstacle_spawn_x = (
-        LLM_OBSTACLE_SPAWN_X
-        if mode == "llm"
-        else NORMAL_OBSTACLE_SPAWN_X
+    game = DinoGame(
+        rng=random.Random(seed),
+        obstacle_spawn_x=NORMAL_OBSTACLE_SPAWN_X,
     )
-    game = DinoGame(rng=random.Random(seed), obstacle_spawn_x=obstacle_spawn_x)
     path = record_path_for_run(record_path, mode, seed, run_index, directory)
     return game, ReplayRecorder(path, seed, mode=mode)
 
@@ -2285,7 +2418,8 @@ class Renderer:
             agent_name: str,
             pause_state: PauseState | None = None,
             now: float | None = None,
-            loading_text: str | None = None):
+            loading_text: str | None = None,
+            cached_frames_text: str | None = None):
         """绘制完整的一帧画面
 
         绘制顺序（从后到前）:
@@ -2397,6 +2531,9 @@ class Renderer:
             self.draw_center_overlay([loading_text], color_pair=6)
 
         # ── 底部操作提示 ──
+        if cached_frames_text:
+            self.safe_addstr(h - 2, 2, cached_frames_text, curses.color_pair(6) | curses.A_DIM)
+
         hint = footer_hint(agent_name, game.speed)
         self.safe_addstr(h - 1, 2, hint, curses.A_DIM)
 
@@ -2554,7 +2691,11 @@ def main(stdscr, cli_args: CliArgs | None = None):
                     action = replay_player.action_for_frame(event_frame)
                     if action == "reset":
                         game.reset()
-                    renderer.draw(game, agent_name)
+                    renderer.draw(
+                        game,
+                        agent_name,
+                        cached_frames_text=cached_frames_text_for_agent(agent),
+                    )
                     continue
 
                 if should_reset_after_game_over(key, agent_active=bool(agent)):
@@ -2567,11 +2708,21 @@ def main(stdscr, cli_args: CliArgs | None = None):
                         agent.reset_plan()
                         if cli_args.llm_debug and recorder:
                             agent.set_debug_path(debug_log_path_for_replay(recorder.path))
-                renderer.draw(game, agent_name)
+                renderer.draw(
+                    game,
+                    agent_name,
+                    cached_frames_text=cached_frames_text_for_agent(agent),
+                )
                 continue
 
             if pause_state.status != "running":
-                renderer.draw(game, agent_name, pause_state, now)
+                renderer.draw(
+                    game,
+                    agent_name,
+                    pause_state,
+                    now,
+                    cached_frames_text=cached_frames_text_for_agent(agent),
+                )
                 continue
 
             # ── 输入处理 ──
@@ -2590,7 +2741,8 @@ def main(stdscr, cli_args: CliArgs | None = None):
                     renderer.draw(
                         game,
                         agent_name,
-                        loading_text="LLM planning next frames...",
+                        loading_text=LLM_LOADING_TEXT,
+                        cached_frames_text=agent.cached_frame_summary(),
                     )
                     continue
                 event_frame = next_frame
@@ -2629,7 +2781,11 @@ def main(stdscr, cli_args: CliArgs | None = None):
                         recorder.record_obstacle(event_frame, obstacle)
                     if game.game_over:
                         finish_recording(recorder)
-            renderer.draw(game, agent_name)
+            renderer.draw(
+                game,
+                agent_name,
+                cached_frames_text=cached_frames_text_for_agent(agent),
+            )
     except KeyboardInterrupt:
         return
 

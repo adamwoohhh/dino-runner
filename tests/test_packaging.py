@@ -560,7 +560,40 @@ class LLMAgentOpenAITest(unittest.TestCase):
         self.assertIn("estimated_overlap_frame=690", prompt)
         self.assertIn("recommended_jump_start=676-688", prompt)
 
-    def test_llm_state_uses_large_obstacle_window_without_frames(self):
+    def test_llm_planning_guidance_delays_window_for_wide_tall_obstacles(self):
+        dino_game = self.dino_game()
+
+        first_crash_guidance = dino_game.llm_planning_guidance({
+            "speed": dino_game.INITIAL_SPEED,
+            "obstacles": [{
+                "kind": "cactus_group",
+                "distance": 137.3,
+                "height": 0,
+                "width": 5,
+                "h": 6,
+            }],
+        }, current_frame=0)
+        self.assertIn("width=5", first_crash_guidance)
+        self.assertIn("estimated_overlap_frame=75", first_crash_guidance)
+        self.assertIn("estimated_clear_frame=78", first_crash_guidance)
+        self.assertIn("recommended_jump_start=65-73", first_crash_guidance)
+
+        wide_tail_guidance = dino_game.llm_planning_guidance({
+            "speed": dino_game.INITIAL_SPEED,
+            "obstacles": [{
+                "kind": "cactus_group",
+                "distance": 419.3,
+                "height": 0,
+                "width": 9,
+                "h": 6,
+            }],
+        }, current_frame=0)
+        self.assertIn("width=9", wide_tail_guidance)
+        self.assertIn("estimated_overlap_frame=229", wide_tail_guidance)
+        self.assertIn("estimated_clear_frame=234", wide_tail_guidance)
+        self.assertIn("recommended_jump_start=221-227", wide_tail_guidance)
+
+    def test_llm_state_uses_large_obstacle_window_with_forecast_obstacles(self):
         dino_game = self.dino_game()
         game = dino_game.DinoGame()
         game.obstacles = [
@@ -573,7 +606,15 @@ class LLMAgentOpenAITest(unittest.TestCase):
         state = game.get_llm_state()
 
         self.assertNotIn("frames", state)
-        self.assertEqual(len(state["obstacles"]), 1)
+        self.assertGreaterEqual(len(state["obstacles"]), 1)
+        self.assertTrue(any(
+            obstacle["x"] == dino_game.DINO_COL + dino_game.LLM_STATE_LOOKAHEAD - 1
+            for obstacle in state["obstacles"]
+        ))
+        self.assertTrue(any(
+            obstacle.get("forecast") is True
+            for obstacle in state["obstacles"]
+        ))
         self.assertGreaterEqual(
             dino_game.LLM_STATE_LOOKAHEAD,
             dino_game.MAX_SPEED * dino_game.LLM_ACTION_WINDOW_FRAMES,
@@ -614,6 +655,73 @@ class LLMAgentOpenAITest(unittest.TestCase):
                 10 + dino_game.LLM_ACTION_WINDOW_FRAMES * 2 - 1,
             ),
         ])
+
+    def test_llm_prefetches_next_window_immediately_after_previous_response(self):
+        dino_game = self.dino_game()
+        config = dino_game.LLMConfig(
+            api_key="sk-test",
+            base_url="https://example.test/v1",
+            model="gpt-test",
+        )
+        agent = dino_game.LLMAgent(config)
+        agent.requested_until_frame = dino_game.LLM_ACTION_WINDOW_FRAMES
+        obstacle_state = {
+            "dino_y": 0.0,
+            "jumping": False,
+            "ducking": False,
+            "speed": 1.0,
+            "score": 0,
+            "obstacles": [{"kind": "cactus_group", "distance": 100}],
+        }
+
+        with mock.patch("threading.Thread") as thread_class:
+            agent.ensure_plan(obstacle_state, 1)
+
+        thread_class.assert_called_once()
+        thread_kwargs = thread_class.call_args.kwargs["kwargs"]
+        self.assertEqual(
+            thread_kwargs["start_frame"],
+            dino_game.LLM_ACTION_WINDOW_FRAMES + 1,
+        )
+        self.assertEqual(thread_kwargs["current_frame"], 0)
+        self.assertEqual(agent.requested_frame_ranges, [
+            (
+                dino_game.LLM_ACTION_WINDOW_FRAMES + 1,
+                dino_game.LLM_ACTION_WINDOW_FRAMES * 2,
+            ),
+        ])
+
+    def test_llm_cached_frame_summary_reports_current_cached_ranges(self):
+        dino_game = self.dino_game()
+        config = dino_game.LLMConfig(
+            api_key="sk-test",
+            base_url="https://example.test/v1",
+            model="gpt-test",
+        )
+        agent = dino_game.LLMAgent(config)
+
+        self.assertIsNone(agent.cached_frame_summary())
+
+        with agent.lock:
+            agent.planned_actions.update({
+                10: "none",
+                11: "jump",
+                12: "none",
+                20: "duck",
+            })
+
+        self.assertEqual(
+            agent.cached_frame_summary(),
+            "Cached frames: 10-12, 20 (4)",
+        )
+
+    def test_llm_loading_text_is_dino_thinking_message(self):
+        dino_game = self.dino_game()
+
+        self.assertEqual(
+            dino_game.LLM_LOADING_TEXT,
+            "Dino is thinking seriously...",
+        )
 
     def test_llm_prefetch_passes_actual_current_frame_to_background_request(self):
         dino_game = self.dino_game()
@@ -781,28 +889,46 @@ class GameTuningTest(unittest.TestCase):
         self.assertGreaterEqual(crossing_seconds, 1.1)
         self.assertLessEqual(crossing_seconds, 1.6)
 
-    def test_llm_game_spawns_obstacles_farther_ahead(self):
+    def test_llm_run_uses_normal_obstacle_spawn_position(self):
         dino_game = importlib.import_module("dino_game")
-        game = dino_game.DinoGame(obstacle_spawn_x=dino_game.LLM_OBSTACLE_SPAWN_X)
-        game.score = 0
+        with tempfile.TemporaryDirectory() as tmpdir:
+            game, _ = dino_game.start_recording_run(
+                "llm",
+                None,
+                1,
+                directory=tmpdir,
+                seed=123,
+            )
 
-        game._spawn_obstacle()
+            game.score = 0
+            game._spawn_obstacle()
 
-        self.assertEqual(game.obstacles[0].x, dino_game.LLM_OBSTACLE_SPAWN_X)
-        self.assertGreater(game.obstacles[0].x, dino_game.NORMAL_OBSTACLE_SPAWN_X)
+        self.assertEqual(game.obstacles[0].x, dino_game.NORMAL_OBSTACLE_SPAWN_X)
 
-    def test_llm_state_includes_farther_obstacles_than_default_state(self):
+    def test_llm_state_forecasts_future_obstacles_without_changing_game_state(self):
         dino_game = importlib.import_module("dino_game")
-        game = dino_game.DinoGame()
-        game.obstacles = [
-            dino_game.Obstacle("cactus_group", dino_game.LLM_OBSTACLE_SPAWN_X),
-        ]
+        rng = dino_game.random.Random(123)
+        game = dino_game.DinoGame(rng=rng)
+        spawn_timer = game.spawn_timer
+        rng_state = rng.getstate()
 
+        llm_state = game.get_llm_state()
+
+        self.assertEqual(game.obstacles, [])
+        self.assertEqual(game.spawn_timer, spawn_timer)
+        self.assertEqual(rng.getstate(), rng_state)
         self.assertEqual(game.get_state()["obstacles"], [])
-        self.assertEqual(
-            game.get_llm_state()["obstacles"][0]["x"],
-            dino_game.LLM_OBSTACLE_SPAWN_X,
+        self.assertTrue(llm_state["obstacles"])
+        self.assertGreater(
+            llm_state["obstacles"][0]["x"],
+            dino_game.NORMAL_OBSTACLE_SPAWN_X,
         )
+        self.assertLessEqual(
+            llm_state["obstacles"][-1]["x"],
+            dino_game.LLM_FORECAST_MAX_X,
+        )
+        self.assertIn("frame", llm_state["obstacles"][0])
+        self.assertEqual(llm_state["obstacles"][0]["forecast"], True)
 
     def test_rule_agent_waits_until_jump_window_after_speed_tuning(self):
         dino_game = importlib.import_module("dino_game")
