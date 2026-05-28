@@ -99,6 +99,11 @@ LLM_HORIZONTAL_OVERLAP_DISTANCE = 6.0
 LLM_RECOMMENDED_JUMP_EARLY_FRAMES = 14
 LLM_RECOMMENDED_JUMP_LATE_FRAMES = 2
 VALID_ACTIONS = {"jump", "duck", "none"}
+ACTION_SYMBOLS = {
+    "none": "-",
+    "jump": "↑",
+    "duck": "↓",
+}
 CONFIG_DIR_NAME = "ai-dino-in-terminal"
 CONFIG_FILE_NAME = "config.json"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -751,6 +756,19 @@ class LLMConfig:
         return bool(self.api_key and self.base_url and self.model)
 
 
+@dataclass(frozen=True)
+class CachedFrameCell:
+    frame: int
+    symbol: str
+    status: str
+
+
+@dataclass(frozen=True)
+class CachedFrameWindow:
+    current_frame: int
+    cells: list[CachedFrameCell]
+
+
 def config_file_path(home: str | None = None) -> str:
     """Return the fixed per-user config file path."""
     home_dir = home if home is not None else os.path.expanduser("~")
@@ -922,6 +940,30 @@ def action_from_llm_text(text: str) -> str:
     if "duck" in normalized:
         return "duck"
     return "none"
+
+
+def action_symbol(action: str) -> str:
+    return ACTION_SYMBOLS.get(action, " ")
+
+
+def cached_frame_window(
+        planned_actions: dict[int, str],
+        consumed_actions: dict[int, str],
+        current_frame: int,
+        radius: int = 12) -> CachedFrameWindow:
+    cells = []
+    for frame in range(current_frame - radius, current_frame + radius + 1):
+        if frame < current_frame:
+            action = consumed_actions.get(frame)
+            status = "consumed" if action is not None else "missing"
+        else:
+            action = planned_actions.get(frame)
+            if frame == current_frame:
+                status = "current" if action is not None else "missing"
+            else:
+                status = "future" if action is not None else "missing"
+        cells.append(CachedFrameCell(frame, action_symbol(action or ""), status))
+    return CachedFrameWindow(current_frame=current_frame, cells=cells)
 
 
 def parse_llm_action_window(
@@ -1182,6 +1224,7 @@ class LLMAgent:
             debug: bool = False,
             debug_path: str | os.PathLike | None = None):
         self.planned_actions: dict[int, str] = {}
+        self.consumed_actions: dict[int, str] = {}
         self.requested_until_frame = 0
         self.request_in_flight = False
         self.requested_frame_ranges: list[tuple[int, int]] = []
@@ -1348,9 +1391,18 @@ height 表示障碍物的高度(鸟)，0=低空，4=中空，8=高空。
             return None
         return f"Cached frames: {ranges} ({len(frames)})"
 
+    def cached_frame_window(self, current_frame: int, radius: int = 12) -> CachedFrameWindow | None:
+        with self.lock:
+            if not self.planned_actions and not self.consumed_actions:
+                return None
+            planned = dict(self.planned_actions)
+            consumed = dict(self.consumed_actions)
+        return cached_frame_window(planned, consumed, current_frame, radius)
+
     def reset_plan(self):
         with self.lock:
             self.planned_actions.clear()
+            self.consumed_actions.clear()
             self.requested_until_frame = 0
             self.request_in_flight = False
             self.requested_frame_ranges.clear()
@@ -1396,10 +1448,14 @@ height 表示障碍物的高度(鸟)，0=低空，4=中空，8=高空。
 
         with self.lock:
             action = self.planned_actions.pop(frame, "none")
+            self.consumed_actions[frame] = action
             min_keep_frame = frame - LLM_ACTION_WINDOW_FRAMES
             for old_frame in list(self.planned_actions):
                 if old_frame < min_keep_frame:
                     self.planned_actions.pop(old_frame, None)
+            for old_frame in list(self.consumed_actions):
+                if old_frame < min_keep_frame:
+                    self.consumed_actions.pop(old_frame, None)
 
         return action
 
@@ -1407,6 +1463,12 @@ height 表示障碍物的高度(鸟)，0=低空，4=中空，8=高空。
 def cached_frames_text_for_agent(agent) -> str | None:
     if isinstance(agent, LLMAgent):
         return agent.cached_frame_summary()
+    return None
+
+
+def cached_frames_view_for_agent(agent, current_frame: int) -> CachedFrameWindow | None:
+    if isinstance(agent, LLMAgent):
+        return agent.cached_frame_window(current_frame)
     return None
 
 
@@ -2582,6 +2644,35 @@ class Renderer:
         """绘制暂停或恢复倒计时提示。"""
         self.draw_center_overlay(pause_overlay_lines(pause_state, now), color_pair=3)
 
+    def draw_cached_frame_window(self, y: int, x: int, window: CachedFrameWindow):
+        """Draw cached LLM action frames as a colored sliding window."""
+        segments: list[tuple[str, int]] = [
+            (
+                f"Frame {window.current_frame:>5}  ",
+                curses.color_pair(6) | curses.A_DIM,
+            )
+        ]
+        for cell in window.cells:
+            text = f"{cell.symbol}"
+            if cell.status == "current":
+                attr = curses.color_pair(3) | curses.A_BOLD
+                text = f"[{text}]"
+            elif cell.status == "consumed":
+                attr = curses.color_pair(5) | curses.A_DIM
+                text = f" {text} "
+            elif cell.status == "future":
+                attr = curses.color_pair(6) | curses.A_BOLD
+                text = f" {text} "
+            else:
+                attr = curses.A_DIM
+                text = " · "
+            segments.append((text, attr))
+
+        cursor = x
+        for text, attr in segments:
+            self.safe_addstr(y, cursor, text, attr)
+            cursor += len(text)
+
     def draw(
             self,
             game: DinoGame,
@@ -2589,7 +2680,8 @@ class Renderer:
             pause_state: PauseState | None = None,
             now: float | None = None,
             loading_text: str | None = None,
-            cached_frames_text: str | None = None):
+            cached_frames_text: str | None = None,
+            cached_frames_view: CachedFrameWindow | None = None):
         """绘制完整的一帧画面
 
         绘制顺序（从后到前）:
@@ -2700,7 +2792,9 @@ class Renderer:
             self.draw_center_overlay([loading_text], color_pair=6)
 
         # ── 底部操作提示 ──
-        if cached_frames_text:
+        if cached_frames_view:
+            self.draw_cached_frame_window(h - 2, 2, cached_frames_view)
+        elif cached_frames_text:
             self.safe_addstr(h - 2, 2, cached_frames_text, curses.color_pair(6) | curses.A_DIM)
 
         hint = footer_hint(agent_name, game.speed)
@@ -2863,7 +2957,7 @@ def main(stdscr, cli_args: CliArgs | None = None):
                     renderer.draw(
                         game,
                         agent_name,
-                        cached_frames_text=cached_frames_text_for_agent(agent),
+                        cached_frames_view=cached_frames_view_for_agent(agent, event_frame + 1),
                     )
                     continue
 
@@ -2880,7 +2974,7 @@ def main(stdscr, cli_args: CliArgs | None = None):
                 renderer.draw(
                     game,
                     agent_name,
-                    cached_frames_text=cached_frames_text_for_agent(agent),
+                    cached_frames_view=cached_frames_view_for_agent(agent, event_frame + 1),
                 )
                 continue
 
@@ -2890,7 +2984,7 @@ def main(stdscr, cli_args: CliArgs | None = None):
                     agent_name,
                     pause_state,
                     now,
-                    cached_frames_text=cached_frames_text_for_agent(agent),
+                    cached_frames_view=cached_frames_view_for_agent(agent, event_frame + 1),
                 )
                 continue
 
@@ -2911,7 +3005,7 @@ def main(stdscr, cli_args: CliArgs | None = None):
                         game,
                         agent_name,
                         loading_text=LLM_LOADING_TEXT,
-                        cached_frames_text=agent.cached_frame_summary(),
+                        cached_frames_view=cached_frames_view_for_agent(agent, next_frame),
                     )
                     continue
                 event_frame = next_frame
@@ -2959,7 +3053,7 @@ def main(stdscr, cli_args: CliArgs | None = None):
             renderer.draw(
                 game,
                 agent_name,
-                cached_frames_text=cached_frames_text_for_agent(agent),
+                cached_frames_view=cached_frames_view_for_agent(agent, event_frame + 1),
             )
     except KeyboardInterrupt:
         return

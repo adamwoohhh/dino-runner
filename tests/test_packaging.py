@@ -730,6 +730,62 @@ class LLMAgentOpenAITest(unittest.TestCase):
             "Cached frames: 10-12, 20 (4)",
         )
 
+    def test_llm_cached_frame_window_uses_action_symbols_and_statuses(self):
+        dino_game = self.dino_game()
+
+        window = dino_game.cached_frame_window(
+            planned_actions={
+                10: "none",
+                11: "jump",
+                12: "duck",
+            },
+            consumed_actions={
+                8: "jump",
+                9: "none",
+            },
+            current_frame=10,
+            radius=2,
+        )
+
+        self.assertEqual(window.current_frame, 10)
+        self.assertEqual(
+            [(cell.frame, cell.symbol, cell.status) for cell in window.cells],
+            [
+                (8, "↑", "consumed"),
+                (9, "-", "consumed"),
+                (10, "-", "current"),
+                (11, "↑", "future"),
+                (12, "↓", "future"),
+            ],
+        )
+
+    def test_llm_cached_frame_window_tracks_consumed_actions(self):
+        dino_game = self.dino_game()
+        config = dino_game.LLMConfig(
+            api_key="sk-test",
+            base_url="https://example.test/v1",
+            model="gpt-test",
+        )
+        agent = dino_game.LLMAgent(config)
+        with agent.lock:
+            agent.planned_actions.update({
+                10: "jump",
+                11: "duck",
+            })
+            agent.requested_until_frame = 100
+
+        self.assertEqual(agent.decide({"obstacles": []}, frame=10), "jump")
+
+        window = agent.cached_frame_window(current_frame=11, radius=1)
+        self.assertEqual(
+            [(cell.frame, cell.symbol, cell.status) for cell in window.cells],
+            [
+                (10, "↑", "consumed"),
+                (11, "↓", "current"),
+                (12, " ", "missing"),
+            ],
+        )
+
     def test_llm_loading_text_is_dino_thinking_message(self):
         dino_game = self.dino_game()
 
@@ -1423,6 +1479,41 @@ class LoadingDinoSpriteTest(unittest.TestCase):
             animation_time=dino_game.LOADING_DINO_ANIM_INTERVAL,
         )
         self.assertNotEqual(ducking_open, ducking_blink)
+
+
+class CachedFrameRendererTest(unittest.TestCase):
+    def test_draw_cached_frame_window_uses_distinct_attrs_for_current_frame(self):
+        dino_game = importlib.import_module("dino_game")
+
+        class FakeScreen:
+            def __init__(self):
+                self.calls = []
+
+            def getmaxyx(self):
+                return (24, 120)
+
+            def addstr(self, y, x, text, attr):
+                self.calls.append((y, x, text, attr))
+
+        renderer = dino_game.Renderer.__new__(dino_game.Renderer)
+        renderer.scr = FakeScreen()
+        window = dino_game.cached_frame_window(
+            planned_actions={10: "none", 11: "jump"},
+            consumed_actions={9: "duck"},
+            current_frame=10,
+            radius=1,
+        )
+
+        with mock.patch.object(dino_game.curses, "color_pair", side_effect=lambda value: value * 100):
+            renderer.draw_cached_frame_window(20, 2, window)
+
+        segments = {text: attr for _, _, text, attr in renderer.scr.calls}
+        self.assertIn("Frame    10  ", segments)
+        self.assertIn(" ↓ ", segments)
+        self.assertIn("[-]", segments)
+        self.assertIn(" ↑ ", segments)
+        self.assertNotEqual(segments["[-]"], segments[" ↓ "])
+        self.assertNotEqual(segments["[-]"], segments[" ↑ "])
 
 
 class ManualInputTest(unittest.TestCase):
