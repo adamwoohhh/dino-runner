@@ -10,6 +10,7 @@ from .agents import RuleAgent
 from .cli import CliArgs
 from .competition import CompetitionRun, run_competition_loop
 from .constants import (
+    FRAME_MS,
     LLM_LIFELINE_REWIND_FRAMES,
     LLM_LIFELINE_REWIND_TEXT,
     LLM_LOADING_TEXT,
@@ -43,6 +44,12 @@ class ReplayListSession:
 
     def run(self):
         browse_replay_files(self.stdscr, list_replay_files())
+
+
+def restore_game_input_mode(stdscr):
+    """Restore non-blocking frame input after blocking menu screens."""
+    stdscr.nodelay(True)
+    stdscr.timeout(FRAME_MS)
 
 
 class CompetitionSession:
@@ -441,6 +448,7 @@ def session_for_cli_args(stdscr, cli_args: CliArgs):
         )
         if not replay_path:
             return None
+        restore_game_input_mode(stdscr)
         return CompetitionSession(stdscr, renderer, cli_args, replay_path)
 
     if cli_args.command == "replay":
@@ -450,6 +458,7 @@ def session_for_cli_args(stdscr, cli_args: CliArgs):
         )
         if not replay_path:
             return None
+        restore_game_input_mode(stdscr)
         return ReplaySession(
             stdscr,
             renderer,

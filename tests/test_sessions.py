@@ -7,6 +7,41 @@ from dino_game.cli import CliArgs
 
 
 class SessionsTest(unittest.TestCase):
+    def test_replay_selection_restores_nonblocking_game_input_before_playback(self):
+        class FakeScreen:
+            def __init__(self):
+                self.nodelay_calls = []
+                self.timeout_calls = []
+
+            def nodelay(self, value):
+                self.nodelay_calls.append(value)
+
+            def timeout(self, value):
+                self.timeout_calls.append(value)
+
+        stdscr = FakeScreen()
+        cli_args = CliArgs(command="replay")
+
+        def select_replay_file(screen, paths):
+            screen.nodelay(False)
+            return "run.json"
+
+        with (
+            mock.patch("dino_game.sessions.Renderer") as renderer_class,
+            mock.patch("dino_game.sessions.list_replay_files", return_value=["run.json"]),
+            mock.patch("dino_game.sessions.select_replay_file", side_effect=select_replay_file),
+            mock.patch(
+                "dino_game.sessions.ReplayPlayer.from_file",
+                return_value=dino_game.ReplayPlayer(seed=123, actions=[], obstacles=[]),
+            ),
+        ):
+            renderer_class.return_value = mock.Mock()
+            session = sessions.session_for_cli_args(stdscr, cli_args)
+
+        self.assertIsInstance(session, sessions.ReplaySession)
+        self.assertEqual(stdscr.nodelay_calls[-1], True)
+        self.assertEqual(stdscr.timeout_calls[-1], dino_game.FRAME_MS)
+
     def test_replay_list_command_uses_replay_list_session_without_renderer(self):
         stdscr = object()
         cli_args = CliArgs(command="replay", replay_action="list")
