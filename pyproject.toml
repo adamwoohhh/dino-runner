@@ -25,9 +25,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/bytedance/agents-competition"
-Repository = "https://github.com/bytedance/agents-competition"
-Issues = "https://github.com/bytedance/agents-competition/issues"
+Homepage = "https://github.com/adamwoohhh/agents-competition"
+Repository = "https://github.com/adamwoohhh/agents-competition"
+Issues = "https://github.com/adamwoohhh/agents-competition/issues"
 
 [project.optional-dependencies]
 dev = [
