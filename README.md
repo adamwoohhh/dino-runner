@@ -1,6 +1,6 @@
 # T-Rex Run | 暴龙快跑
 
-Chrome 断网小恐龙的终端版。可以手动玩，也可以让规则 Agent 或 Claude LLM Agent 自动玩。
+Chrome 断网小恐龙的终端版。可以手动玩，也可以让规则 Agent 或 OpenAI LLM Agent 自动玩。
 
 ## 安装
 
@@ -30,9 +30,13 @@ dino play
 # 规则 Agent 自动玩
 dino agent
 
-# Claude LLM Agent 自动玩
-export ANTHROPIC_API_KEY=sk-ant-...
+# OpenAI LLM Agent 自动玩
+dino config +setup
 dino llm
+
+# 查看或重置 LLM 配置
+dino config
+dino config +reset
 
 # 选择历史运行记录并重放
 dino replay
@@ -59,6 +63,9 @@ python3 dino_game.py
 python3 dino_game.py play
 python3 dino_game.py agent
 python3 dino_game.py llm
+python3 dino_game.py config
+python3 dino_game.py config +setup
+python3 dino_game.py config +reset
 python3 dino_game.py replay
 python3 dino_game.py replay run.json
 python3 dino_game.py replay +list
@@ -73,17 +80,22 @@ python3 dino_game.py compete run.json
 |------|------|------|
 | `dino` / `dino play` | 手动操作恐龙 | 无 |
 | `dino agent` | 使用本地规则 Agent 自动决策 | 无 |
-| `dino llm` | 使用 Claude API 决策 | `ANTHROPIC_API_KEY` |
+| `dino llm` | 使用 OpenAI Responses API 决策 | `~/.config/ai-dino-in-terminal/config.json` 或启动时交互输入 |
 | `dino replay` | 从历史运行记录列表选择并重放 | `replays/*.json` |
 | `dino replay run.json` | 直接从指定文件重放 | 对应 replay 文件 |
 | `dino replay +list` | 浏览所有 replay 文件，回车查看元信息 | `replays/*.json` |
 | `dino replay +clear` | 清除所有 replay 记录文件 | `replays/*.json` |
 | `dino compete` | 从历史运行记录列表选择一局并进入双赛道竞技 | `replays/*.json` |
 | `dino compete run.json` | 直接使用指定 replay 进入竞技模式 | 对应 replay 文件 |
+| `dino config` | 查看本地 LLM 配置（API key 脱敏显示） | 无 |
+| `dino config +setup` | 交互式写入本地 LLM 配置 | OpenAI-compatible API key |
+| `dino config +reset` | 重置本地 LLM 配置 | 无 |
 | `dino play --record run.json` | 指定录制文件路径 | 无 |
 | `dino help` | 查看可用命令和公共参数 | 无 |
 
-如果 `dino llm` 没有检测到 `ANTHROPIC_API_KEY`，游戏会降级为规则 Agent。
+LLM 配置文件固定保存在 `~/.config/ai-dino-in-terminal/config.json`。
+如果 `dino llm` 缺少必要配置，启动游戏前会提示输入 `api_key`、`base_url` 和 `model`；
+输入完成后会询问是否持久化到本地配置，默认 `N`，仅本次运行使用。
 
 默认每次运行都会记录到 `replays/` 目录，文件名形如
 `20260527-153012-manual-123456.json`，其中包含运行模式 `manual`、`agent`

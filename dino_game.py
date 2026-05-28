@@ -14,14 +14,14 @@ Terminal Dino Runner — Chrome 断网小恐龙的终端版本
        ▼                                 │
   ┌──────────┐                     ┌─────┴─────┐
   │  渲染器   │                     │ RuleAgent │  基于距离阈值（毫秒级）
-  │ Renderer │                     │ LLMAgent  │  调用 Claude API（秒级）
+  │ Renderer │                     │ LLMAgent  │  调用 OpenAI Responses API（秒级）
   └──────────┘                     └───────────┘
 
 三种运行模式:
   python dino_game.py                 # 等价于 play，人类手动玩
   python dino_game.py play            # 人类手动玩
   python dino_game.py agent           # 规则 AI Agent 自动玩
-  python dino_game.py llm             # Claude LLM Agent 玩 (需要 ANTHROPIC_API_KEY)
+  python dino_game.py llm             # OpenAI LLM Agent 玩 (需要本地配置或交互输入)
   python dino_game.py replay          # 从运行记录列表选择并重放
   python dino_game.py replay run.json # 重放一局
   python dino_game.py replay +list    # 浏览记录并查看元信息
@@ -60,6 +60,10 @@ FRAME_MS = 1000 // FPS    # 每帧毫秒数，传给 curses.timeout()
 
 GROUND_ROW = 18           # 地面在终端的第几行（从上往下数）
 DINO_COL = 8              # 恐龙固定在屏幕左侧第 8 列
+NORMAL_OBSTACLE_SPAWN_X = 82
+LLM_OBSTACLE_SPAWN_X = 1250
+NORMAL_STATE_LOOKAHEAD = NORMAL_OBSTACLE_SPAWN_X - DINO_COL + 10
+LLM_STATE_LOOKAHEAD = LLM_OBSTACLE_SPAWN_X - DINO_COL + 10
 
 JUMP_VELOCITY = -1.75     # 起跳初速度（负值 = 向上）
 GRAVITY = 0.22            # 每帧施加的重力加速度
@@ -83,6 +87,18 @@ SPEED_DROP_MULTIPLIER = 3.0
 REPLAY_DIR = "replays"
 VERSION = "0.1.0"
 PAUSE_COUNTDOWN_SECONDS = 3
+LLM_ACTION_WINDOW_SECONDS = 10
+LLM_ACTION_WINDOW_FRAMES = FPS * LLM_ACTION_WINDOW_SECONDS
+LLM_PREFETCH_THRESHOLD_FRAMES = 20
+LLM_FALLBACK_WINDOW_FRAMES = 12
+LLM_HORIZONTAL_OVERLAP_DISTANCE = 6.0
+LLM_RECOMMENDED_JUMP_EARLY_FRAMES = 14
+LLM_RECOMMENDED_JUMP_LATE_FRAMES = 2
+VALID_ACTIONS = {"jump", "duck", "none"}
+CONFIG_DIR_NAME = "ai-dino-in-terminal"
+CONFIG_FILE_NAME = "config.json"
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_OPENAI_MODEL = "gpt-5-mini"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -317,8 +333,9 @@ class DinoGame:
     不负责: 渲染（交给 Renderer）、决策（交给 Agent）
     """
 
-    def __init__(self, rng=None):
+    def __init__(self, rng=None, obstacle_spawn_x: float = NORMAL_OBSTACLE_SPAWN_X):
         self.rng = rng if rng is not None else random
+        self.obstacle_spawn_x = obstacle_spawn_x
         self.reset()
 
     def reset(self):
@@ -356,7 +373,7 @@ class DinoGame:
             # 空中且仍在上升阶段 → 反转并放大速度，快速下落
             self.dino_vy = max(abs(self.dino_vy) * SPEED_DROP_MULTIPLIER, 1.0)
 
-    def get_state(self) -> dict:
+    def get_state(self, max_obstacle_distance: float = NORMAL_STATE_LOOKAHEAD) -> dict:
         """导出当前游戏状态的结构化快照 — Agent 的「眼睛」
 
         这是 Agent 与游戏交互的核心接口。Agent 通过这个方法
@@ -381,12 +398,13 @@ class DinoGame:
         """
         nearest = []
         for obs in sorted(self.obstacles, key=lambda o: o.x):
+            distance = obs.x - DINO_COL
             # 只返回还没完全飞过恐龙的障碍物
-            if obs.x + obs.width > DINO_COL - 2:
+            if obs.x + obs.width > DINO_COL - 2 and distance <= max_obstacle_distance:
                 nearest.append({
                     "kind": obs.kind,
                     "x": round(obs.x, 1),
-                    "distance": round(obs.x - DINO_COL, 1),
+                    "distance": round(distance, 1),
                     "height": obs.height,
                     "width": obs.width,
                     "h": obs.h,
@@ -403,6 +421,10 @@ class DinoGame:
             "score": self.score,
             "obstacles": nearest,
         }
+
+    def get_llm_state(self) -> dict:
+        """导出 LLM 使用的更大前视窗口状态。"""
+        return self.get_state(max_obstacle_distance=LLM_STATE_LOOKAHEAD)
 
     def update(self, replay_obstacles: list[dict] | None = None) -> list[Obstacle]:
         """推进一帧游戏逻辑 — 每帧调用一次
@@ -492,7 +514,7 @@ class DinoGame:
         return spawned_obstacles
 
     def _spawn_obstacle(self) -> Obstacle:
-        """在屏幕右侧 (x=82) 生成一个新障碍物
+        """在屏幕右侧生成一个新障碍物
 
         障碍物种类随分数推进:
           - 0~200:   只有随机仙人掌组
@@ -517,7 +539,7 @@ class DinoGame:
 
         obstacle = Obstacle(
             kind,
-            82,
+            self.obstacle_spawn_x,
             height,
             difficulty=difficulty_for_score(self.score),
             rng=self.rng,
@@ -586,118 +608,551 @@ class RuleAgent:
         return "none"
 
 
+@dataclass(frozen=True)
+class LLMConfig:
+    """OpenAI-compatible LLM configuration."""
+
+    api_key: str = ""
+    base_url: str = DEFAULT_OPENAI_BASE_URL
+    model: str = DEFAULT_OPENAI_MODEL
+
+    def is_complete(self) -> bool:
+        return bool(self.api_key and self.base_url and self.model)
+
+
+def config_file_path(home: str | None = None) -> str:
+    """Return the fixed per-user config file path."""
+    home_dir = home if home is not None else os.path.expanduser("~")
+    return os.path.join(home_dir, ".config", CONFIG_DIR_NAME, CONFIG_FILE_NAME)
+
+
+def load_llm_config(path: str | os.PathLike | None = None) -> LLMConfig:
+    """Load LLM config from disk; missing or invalid files produce defaults."""
+    config_path = os.fspath(path or config_file_path())
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return LLMConfig()
+    if not isinstance(data, dict):
+        return LLMConfig()
+    return LLMConfig(
+        api_key=str(data.get("api_key") or ""),
+        base_url=str(data.get("base_url") or DEFAULT_OPENAI_BASE_URL),
+        model=str(data.get("model") or DEFAULT_OPENAI_MODEL),
+    )
+
+
+def save_llm_config(config: LLMConfig, path: str | os.PathLike | None = None):
+    """Persist LLM config as JSON."""
+    config_path = os.fspath(path or config_file_path())
+    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    data = {
+        "api_key": config.api_key,
+        "base_url": config.base_url,
+        "model": config.model,
+    }
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+
+
+def reset_llm_config(path: str | os.PathLike | None = None) -> bool:
+    """Delete the config file if it exists."""
+    config_path = os.fspath(path or config_file_path())
+    try:
+        os.remove(config_path)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def mask_api_key(api_key: str) -> str:
+    """Mask an API key for display."""
+    if not api_key:
+        return "(not set)"
+    if len(api_key) <= 8:
+        return f"{api_key[:2]}...{api_key[-2:]}"
+    return f"{api_key[:4]}...{api_key[-4:]}"
+
+
+def render_llm_config(config: LLMConfig, path: str | os.PathLike | None = None) -> str:
+    """Render config for CLI display without leaking the full API key."""
+    config_path = os.fspath(path or config_file_path())
+    return "\n".join([
+        f"path: {config_path}",
+        f"api_key: {mask_api_key(config.api_key)}",
+        f"base_url: {config.base_url or '(not set)'}",
+        f"model: {config.model or '(not set)'}",
+    ])
+
+
+def prompt_for_llm_config(
+        existing: LLMConfig | None = None,
+        *,
+        input_func=input,
+        output_func=print,
+        ask_persist: bool = False) -> tuple[LLMConfig, bool]:
+    """Prompt for LLM settings and optionally ask whether to persist them."""
+    existing = existing or LLMConfig()
+    output_func("Configure OpenAI-compatible LLM settings.")
+
+    api_key = input_func("API key: ").strip() or existing.api_key
+    while not api_key:
+        output_func("API key is required.")
+        api_key = input_func("API key: ").strip()
+
+    base_prompt = f"Base URL [{existing.base_url or DEFAULT_OPENAI_BASE_URL}]: "
+    base_url = input_func(base_prompt).strip() or existing.base_url or DEFAULT_OPENAI_BASE_URL
+
+    model_prompt = f"Model [{existing.model or DEFAULT_OPENAI_MODEL}]: "
+    model = input_func(model_prompt).strip() or existing.model or DEFAULT_OPENAI_MODEL
+
+    persist = False
+    if ask_persist:
+        answer = input_func("Save config to local file? [y/N]: ").strip().lower()
+        persist = answer in {"y", "yes"}
+
+    return LLMConfig(api_key=api_key, base_url=base_url, model=model), persist
+
+
+def run_config_setup(
+        *,
+        config_path: str | os.PathLike | None = None,
+        input_func=input,
+        output_func=print) -> LLMConfig:
+    """Interactive config setup that always writes to disk."""
+    path = config_path or config_file_path()
+    existing = load_llm_config(path)
+    config, _ = prompt_for_llm_config(
+        existing,
+        input_func=input_func,
+        output_func=output_func,
+        ask_persist=False,
+    )
+    save_llm_config(config, path)
+    output_func(f"Saved config to {path}")
+    return config
+
+
+def resolve_llm_config_for_run(
+        *,
+        config_path: str | os.PathLike | None = None,
+        input_func=input,
+        output_func=print) -> LLMConfig:
+    """Load config for `dino llm`, prompting if required values are absent."""
+    path = config_path or config_file_path()
+    config = load_llm_config(path)
+    if config.is_complete():
+        return config
+
+    config, persist = prompt_for_llm_config(
+        config,
+        input_func=input_func,
+        output_func=output_func,
+        ask_persist=True,
+    )
+    if persist:
+        save_llm_config(config, path)
+        output_func(f"Saved config to {path}")
+    return config
+
+# TODO: 要求 llm 返回 json 格式的数据，避免解析字符串
+def extract_response_text(result: dict) -> str:
+    """Extract text from common OpenAI Responses API response shapes."""
+    output_text = result.get("output_text")
+    if isinstance(output_text, str):
+        return output_text
+
+    output = result.get("output")
+    if not isinstance(output, list):
+        return ""
+    parts = []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if isinstance(text, str):
+            parts.append(text)
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+    return "\n".join(parts)
+
+
+def action_from_llm_text(text: str) -> str:
+    """Map model text to a game action."""
+    normalized = text.strip().lower()
+    if "jump" in normalized:
+        return "jump"
+    if "duck" in normalized:
+        return "duck"
+    return "none"
+
+
+def parse_llm_action_window(
+        text: str,
+        requested_start_frame: int,
+        expected_action_count: int | None = None) -> dict[int, str]:
+    """Parse a model-returned JSON action window into frame-indexed actions."""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    if data.get("start_frame") != requested_start_frame:
+        return {}
+    actions = data.get("actions")
+    if not isinstance(actions, list) or not actions:
+        return {}
+    if expected_action_count is not None:
+        actions = actions[:expected_action_count]
+        actions = actions + ["none"] * (expected_action_count - len(actions))
+
+    planned = {}
+    for offset, action in enumerate(actions):
+        if action not in VALID_ACTIONS:
+            return {}
+        planned[requested_start_frame + offset] = action
+    return planned
+
+
+def llm_action_window_text_format(start_frame: int, window_frames: int) -> dict:
+    """Return the Responses API structured output format for action windows."""
+    return {
+        "type": "json_schema",
+        "name": "dino_action_window",
+        "description": "A fixed-length per-frame action plan for the dino game.",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "start_frame": {
+                    "type": "integer",
+                    "enum": [start_frame],
+                },
+                "actions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["jump", "duck", "none"],
+                    },
+                    "minItems": window_frames,
+                    "maxItems": window_frames,
+                },
+            },
+            "required": ["start_frame", "actions"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def jump_physics_summary() -> tuple[int, float]:
+    """Return the current jump airtime and peak height from game constants."""
+    dino_y = 0.0
+    dino_vy = JUMP_VELOCITY
+    max_y = 0.0
+    for frame in range(1, FPS * 2):
+        dino_y -= dino_vy
+        dino_vy += GRAVITY
+        if dino_y <= 0 and frame > 1:
+            return frame, max_y
+        max_y = max(max_y, dino_y)
+    return FPS * 2, max_y
+
+
+def estimate_frames_until_horizontal_overlap(distance: float, speed: float) -> int:
+    """Estimate frames until an obstacle reaches the dino collision band."""
+    if distance <= LLM_HORIZONTAL_OVERLAP_DISTANCE:
+        return 0
+    target_distance = distance - LLM_HORIZONTAL_OVERLAP_DISTANCE
+    travelled = 0.0
+    for frames in range(1, LLM_ACTION_WINDOW_FRAMES * 2 + 1):
+        frame_speed = min(MAX_SPEED, speed + SPEED_ACCELERATION * frames)
+        travelled += frame_speed
+        if travelled >= target_distance:
+            return frames
+    return math.ceil(target_distance / max(speed, 0.1))
+
+
+def llm_planning_guidance(state: dict, current_frame: int) -> str:
+    """Build prompt guidance from local physics and obstacle timing estimates."""
+    jump_frames, max_jump_height = jump_physics_summary()
+    speed = float(state.get("speed", INITIAL_SPEED))
+    lines = [
+        "游戏物理设定:",
+        (
+            f"- 帧率 {FPS} FPS；一次 jump 约持续 {jump_frames} 帧，"
+            f"最高高度约 {max_jump_height:.1f}。"
+        ),
+        "- jump 只有在地面且未 jumping 时生效；重复 jump 不会延长滞空。",
+        (
+            f"- 当前速度 {speed:.2f} 列/帧；速度每帧增加 "
+            f"{SPEED_ACCELERATION:g}，最大速度 {MAX_SPEED:g}。"
+        ),
+        (
+            f"- 水平碰撞通常在 distance <= "
+            f"{LLM_HORIZONTAL_OVERLAP_DISTANCE:g} 左右开始，不是 distance=0。"
+        ),
+        (
+            "- 地面障碍或低空鸟不要过早起跳；推荐在 estimated_overlap_frame "
+            f"前 {LLM_RECOMMENDED_JUMP_EARLY_FRAMES} 到 "
+            f"{LLM_RECOMMENDED_JUMP_LATE_FRAMES} 帧之间起跳。"
+        ),
+        "- 中空鸟 height=4 优先 duck；高空鸟 height=8 通常 none。",
+        "推荐起跳窗口估算:",
+    ]
+
+    obstacles = state.get("obstacles") or []
+    if not obstacles:
+        lines.append("- 当前没有可见障碍物。")
+        return "\n".join(lines)
+
+    for index, obstacle in enumerate(obstacles, start=1):
+        distance = float(obstacle.get("distance", 0.0))
+        frames_until_overlap = estimate_frames_until_horizontal_overlap(distance, speed)
+        overlap_frame = current_frame + frames_until_overlap
+        kind = obstacle.get("kind", "unknown")
+        height = obstacle.get("height", 0)
+        if kind == "bird" and height == 4:
+            recommendation = "recommended_action=duck"
+        elif kind == "bird" and height == 8:
+            recommendation = "recommended_action=none"
+        else:
+            jump_start = overlap_frame - LLM_RECOMMENDED_JUMP_EARLY_FRAMES
+            jump_end = overlap_frame - LLM_RECOMMENDED_JUMP_LATE_FRAMES
+            recommendation = f"recommended_jump_start={jump_start}-{jump_end}"
+        lines.append(
+            f"- obstacle#{index}: kind={kind}, distance={distance:g}, "
+            f"estimated_overlap_frame={overlap_frame}, {recommendation}"
+        )
+    return "\n".join(lines)
+
+
+def llm_state_has_obstacles(state: dict) -> bool:
+    """Return whether an LLM request state contains any obstacle information."""
+    return bool(state.get("obstacles"))
+
+
 class LLMAgent:
-    """调用 Claude API 的 LLM Agent — 慢但能「理解」游戏
+    """调用 OpenAI Responses API 的 LLM Agent，缓存未来逐帧动作。"""
 
-    工作流程:
-      1. 每 0.8 秒向 Claude Haiku 发送一次当前游戏状态
-      2. 在后台线程中等待 API 响应（避免阻塞游戏主循环）
-      3. 响应到达后缓存动作，下一帧生效
-
-    注意:
-      - API 延迟 200ms~2s，所以 LLM 的决策总是「滞后」的
-      - 实际效果不如 RuleAgent（延迟是硬伤）
-      - 但它展示了一个重要概念: LLM 能直接读懂游戏状态并做决策
-      - 需要 ANTHROPIC_API_KEY 环境变量
-    """
-
-    def __init__(self):
-        self.pending_action = "none"    # 缓存的待执行动作
-        self.last_call_time = 0         # 上次 API 调用时间戳
-        self.call_interval = 0.8        # API 调用间隔（秒），避免速率限制
+    def __init__(
+            self,
+            config: LLMConfig | None = None,
+            *,
+            debug: bool = False,
+            debug_path: str | os.PathLike | None = None):
+        self.planned_actions: dict[int, str] = {}
+        self.requested_until_frame = 0
+        self.request_in_flight = False
+        self.requested_frame_ranges: list[tuple[int, int]] = []
         self.lock = threading.Lock()    # 线程安全锁
-        self._check_api_key()
+        self.config = config or load_llm_config()
+        self.debug = debug
+        self.debug_path = os.fspath(debug_path) if debug_path is not None else None
+        if not self.config.is_complete():
+            raise ValueError("LLM config requires api_key, base_url, and model")
 
-    def _check_api_key(self):
-        self.api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not self.api_key:
-            raise ValueError("需要设置 ANTHROPIC_API_KEY 环境变量")
+    def set_debug_path(self, debug_path: str | os.PathLike | None):
+        self.debug_path = os.fspath(debug_path) if debug_path is not None else None
 
-    def _call_llm(self, state: dict):
-        """在后台线程中调用 Claude Haiku API
+    def _debug_log(self, event: str, **data):
+        if not self.debug or not self.debug_path:
+            return
+        payload = {"event": event, **data}
+        os.makedirs(os.path.dirname(self.debug_path), exist_ok=True)
+        with open(self.debug_path, "a", encoding="utf-8") as f:
+            print(json.dumps(payload, ensure_ascii=False), file=f, flush=True)
 
-        选择 Haiku 而非 Sonnet/Opus 的原因:
-          - 延迟更低（对实时游戏很关键）
-          - 足够理解简单的游戏状态
-          - 成本更低（高频调用）
-        """
+    def _call_llm(
+            self,
+            state: dict,
+            *,
+            start_frame: int,
+            current_frame: int | None = None,
+            window_frames: int = LLM_ACTION_WINDOW_FRAMES):
+        """在后台线程中调用 OpenAI Responses API。"""
+        if current_frame is None:
+            current_frame = start_frame - 1
         try:
             import urllib.request
 
-            # 构造 prompt — 把游戏状态翻译成自然语言
-            prompt = f"""你正在玩一个恐龙跑酷游戏。根据当前游戏状态决定操作。
+            planning_guidance = llm_planning_guidance(state, current_frame)
+            prompt = f"""你正在玩一个恐龙跑酷游戏。请根据当前状态规划未来 {window_frames} actions。
 
 当前状态:
+- 当前帧: {current_frame}
+- 需要返回的第一帧 start_frame: {start_frame}
+- start_frame 距当前状态还有 {start_frame - current_frame} 帧
 - 恐龙高度: {state['dino_y']} (0=地面)
 - 正在跳跃: {state['jumping']}
 - 正在蹲下: {state['ducking']}
 - 游戏速度: {state['speed']}
+- 当前分数: {state['score']}
 - 前方障碍物: {json.dumps(state['obstacles'], ensure_ascii=False)}
 
 距离 distance 表示障碍物离恐龙的距离，越小越近。
+障碍物每帧向恐龙靠近约 speed 列，因此 distance / speed 可估算还有多少帧相遇。
 height 表示障碍物的高度(鸟)，0=低空，4=中空，8=高空。
+当前恐龙状态由 dino_y、dino_vy、jumping、ducking 表示。
 
-你只能回答一个词: jump / duck / none
-- jump: 跳跃（躲避仙人掌或低空鸟）
-- duck: 蹲下（躲避中空鸟）
-- none: 什么都不做
+{planning_guidance}
 
+你必须只返回 JSON，不要解释。格式:
+{{"start_frame": {start_frame}, "actions": ["none", "jump"]}}
+
+要求:
+- start_frame 必须等于 {start_frame}
+- actions 必须正好包含 {window_frames} actions
+- 每个 action 只能是 jump / duck / none
+- 每个 action 对应从 start_frame 开始的一帧
 回答:"""
 
-            # 通过 urllib 直接调用 Anthropic Messages API（避免依赖 SDK）
             data = json.dumps({
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 10,        # 只需要一个词
-                "messages": [{"role": "user", "content": prompt}],
+                "model": self.config.model,
+                "input": prompt,
+                "text": {
+                    "format": llm_action_window_text_format(start_frame, window_frames),
+                },
+                # "max_output_tokens": max(200, window_frames * 8),
+                "stream": False,
             }).encode()
+            request_payload = json.loads(data.decode())
+            self._debug_log(
+                "llm_request",
+                start_frame=start_frame,
+                current_frame=current_frame,
+                window_frames=window_frames,
+                state=state,
+                payload=request_payload,
+            )
 
             req = urllib.request.Request(
-                "https://api.anthropic.com/v1/messages",
+                f"{self.config.base_url.rstrip('/')}/responses",
                 data=data,
                 headers={
                     "Content-Type": "application/json",
-                    "x-api-key": self.api_key,
-                    "anthropic-version": "2023-06-01",
+                    "Authorization": f"Bearer {self.config.api_key}",
                 },
             )
 
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with urllib.request.urlopen(req, timeout=60) as resp:
                 result = json.loads(resp.read())
-                text = result["content"][0]["text"].strip().lower()
-
-                # 从回复中提取动作
-                action = "none"
-                if "jump" in text:
-                    action = "jump"
-                elif "duck" in text:
-                    action = "duck"
+                response_text = extract_response_text(result)
+                planned = parse_llm_action_window(
+                    response_text,
+                    requested_start_frame=start_frame,
+                    expected_action_count=window_frames,
+                )
+                if not planned:
+                    planned = self._fallback_actions(start_frame, window_frames)
+                self._debug_log(
+                    "llm_response",
+                    start_frame=start_frame,
+                    current_frame=current_frame,
+                    window_frames=window_frames,
+                    raw_response=result,
+                    response_text=response_text,
+                    planned_actions=planned,
+                )
 
                 with self.lock:
-                    self.pending_action = action
+                    self.planned_actions.update(planned)
+                    self.requested_until_frame = max(planned)
 
-        except Exception:
-            # API 调用失败时默认不操作（宁可不跳也别崩溃）
+        except Exception as exc:
             with self.lock:
-                self.pending_action = "none"
+                planned = self._fallback_actions(start_frame, window_frames)
+                self.planned_actions.update(planned)
+                self.requested_until_frame = max(planned)
+            self._debug_log(
+                "llm_error",
+                start_frame=start_frame,
+                current_frame=current_frame,
+                window_frames=window_frames,
+                error=repr(exc),
+                planned_actions=planned,
+            )
+        finally:
+            with self.lock:
+                self.request_in_flight = False
 
-    def decide(self, state: dict) -> str:
-        """异步决策: 发起 API 调用，返回上一次的缓存结果
+    def _fallback_actions(
+            self,
+            start_frame: int,
+            window_frames: int = LLM_ACTION_WINDOW_FRAMES) -> dict[int, str]:
+        return {
+            start_frame + offset: "none"
+            for offset in range(window_frames)
+        }
 
-        每帧都会被调用，但只有间隔超过 call_interval 时才真正发请求。
-        返回值是上一次 API 调用的结果（有延迟）。
-        """
-        now = time.time()
+    def _none_actions(self, start_frame: int, window_frames: int) -> dict[int, str]:
+        return {
+            start_frame + offset: "none"
+            for offset in range(window_frames)
+        }
 
-        # 限流: 间隔足够长才发新请求
-        if now - self.last_call_time >= self.call_interval:
-            self.last_call_time = now
-            # 后台线程调用 API，不阻塞游戏主循环
-            t = threading.Thread(target=self._call_llm, args=(state,), daemon=True)
-            t.start()
+    def needs_loading(self, frame: int) -> bool:
+        with self.lock:
+            return frame not in self.planned_actions
+
+    def reset_plan(self):
+        with self.lock:
+            self.planned_actions.clear()
+            self.requested_until_frame = 0
+            self.request_in_flight = False
+            self.requested_frame_ranges.clear()
+
+    def ensure_plan(self, state: dict, start_frame: int):
+        with self.lock:
+            if self.request_in_flight:
+                return
+            if self.requested_until_frame - start_frame >= LLM_PREFETCH_THRESHOLD_FRAMES:
+                return
+            request_start = (
+                self.requested_until_frame + 1
+                if self.requested_until_frame > 0
+                else start_frame
+            )
+            request_end = request_start + LLM_ACTION_WINDOW_FRAMES - 1
+            if not llm_state_has_obstacles(state):
+                planned = self._none_actions(request_start, LLM_ACTION_WINDOW_FRAMES)
+                self.planned_actions.update(planned)
+                self.requested_until_frame = request_end
+                self.requested_frame_ranges.append((request_start, request_end))
+                self.request_in_flight = False
+                return
+            self.request_in_flight = True
+            self.requested_frame_ranges.append((request_start, request_end))
+        t = threading.Thread(
+            target=self._call_llm,
+            args=(state,),
+            kwargs={
+                "start_frame": request_start,
+                "current_frame": start_frame - 1,
+                "window_frames": LLM_ACTION_WINDOW_FRAMES,
+            },
+            daemon=True,
+        )
+        t.start()
+
+    def decide(self, state: dict, frame: int | None = None) -> str:
+        """返回当前帧已缓存动作，并预取后续动作窗口。"""
+        if frame is None:
+            frame = 1
+        self.ensure_plan(state, frame + 1)
 
         with self.lock:
-            action = self.pending_action
-            self.pending_action = "none"  # 消费掉，避免重复执行
+            action = self.planned_actions.pop(frame, "none")
+            min_keep_frame = frame - LLM_ACTION_WINDOW_FRAMES
+            for old_frame in list(self.planned_actions):
+                if old_frame < min_keep_frame:
+                    self.planned_actions.pop(old_frame, None)
 
         return action
 
@@ -790,6 +1245,9 @@ class CliArgs:
     replay_path: str | None = None
     replay_action: str = "play"
     competition_path: str | None = None
+    config_action: str = "show"
+    llm_config: LLMConfig | None = None
+    llm_debug: bool = False
     show_help: bool = False
     help_text: str | None = None
     version: str | None = None
@@ -799,13 +1257,16 @@ COMMAND_GROUPS = [
     ("Core", [
         ("play", "Start a manual game"),
         ("agent", "Run with the local rule-based agent"),
-        ("llm", "Run with the Claude LLM agent"),
+        ("llm", "Run with the OpenAI LLM agent"),
     ]),
     ("Replay", [
         ("replay", "Play, inspect, or clear replay records"),
     ]),
     ("Competition", [
         ("compete", "Start competition mode from a replay"),
+    ]),
+    ("Config", [
+        ("config", "View or update LLM configuration"),
     ]),
     ("Help", [
         ("help", "Show available commands and global options"),
@@ -866,8 +1327,11 @@ def render_command_help(command: str) -> str:
         usage = "dino agent [--record FILE]"
         options = ["  --record FILE    Write the replay recording to FILE"]
     elif command == "llm":
-        usage = "dino llm [--record FILE]"
-        options = ["  --record FILE    Write the replay recording to FILE"]
+        usage = "dino llm [--record FILE] [--debug]"
+        options = [
+            "  --record FILE    Write the replay recording to FILE",
+            "  --debug          Write LLM request and response JSON lines to logs/",
+        ]
     elif command == "replay":
         usage = "dino replay [FILE]"
         options = [
@@ -884,6 +1348,17 @@ def render_command_help(command: str) -> str:
         options = [
             "  FILE             Start competition from FILE; omit it to choose from a list",
             "  --record FILE    Write the competition replay recording to FILE",
+        ]
+    elif command == "config":
+        usage = "dino config [+setup|+reset]"
+        options = [
+            "  +setup           Prompt for LLM settings and save them locally",
+            "  +reset           Remove the local LLM config file",
+            "",
+            "Examples:",
+            "  dino config",
+            "  dino config +setup",
+            "  dino config +reset",
         ]
     elif command == "help":
         usage = "dino help [command]"
@@ -924,6 +1399,18 @@ def _split_record_option(args: list[str]) -> tuple[str | None, list[str]]:
     return record_path, remaining
 
 
+def _split_debug_option(args: list[str]) -> tuple[bool, list[str]]:
+    """从参数列表中取出 --debug，并返回剩余参数。"""
+    debug = False
+    remaining = []
+    for arg in args:
+        if arg == "--debug":
+            debug = True
+        else:
+            remaining.append(arg)
+    return debug, remaining
+
+
 def parse_cli_args(args: list[str]) -> CliArgs:
     """解析新命令行接口；无法识别的子命令回退到总 help。"""
     args = list(args)
@@ -947,9 +1434,17 @@ def parse_cli_args(args: list[str]) -> CliArgs:
 
     if command in RUN_COMMAND_MODES:
         record_path, remaining = _split_record_option(command_args)
+        llm_debug = False
+        if command == "llm":
+            llm_debug, remaining = _split_debug_option(remaining)
         if remaining:
             return CliArgs(command=command, show_help=True, help_text=render_command_help(command))
-        return CliArgs(command=command, mode=RUN_COMMAND_MODES[command], record_path=record_path)
+        return CliArgs(
+            command=command,
+            mode=RUN_COMMAND_MODES[command],
+            record_path=record_path,
+            llm_debug=llm_debug,
+        )
 
     if command == "replay":
         if command_args == ["+list"]:
@@ -974,6 +1469,15 @@ def parse_cli_args(args: list[str]) -> CliArgs:
             record_path=record_path,
             competition_path=competition_path,
         )
+
+    if command == "config":
+        if not command_args:
+            return CliArgs(command=command, config_action="show")
+        if command_args == ["+setup"]:
+            return CliArgs(command=command, config_action="setup")
+        if command_args == ["+reset"]:
+            return CliArgs(command=command, config_action="reset")
+        return CliArgs(command=command, show_help=True, help_text=render_command_help(command))
 
     return CliArgs(show_help=True, help_text=render_main_help())
 
@@ -1015,6 +1519,11 @@ def record_path_for_run(
         return record_path
     root, ext = os.path.splitext(record_path)
     return f"{root}-{run_index}{ext or '.json'}"
+
+
+def debug_log_path_for_replay(replay_path: str | os.PathLike, directory: str = "logs") -> str:
+    """Return the debug log path that mirrors a replay filename under logs/."""
+    return os.path.join(directory, os.path.basename(os.fspath(replay_path)))
 
 
 def list_replay_files(directory: str = REPLAY_DIR) -> list[str]:
@@ -1545,7 +2054,12 @@ def start_recording_run(
     """启动一局新游戏，并为这一局创建独立 replay recorder。"""
     if seed is None:
         seed = time.time_ns()
-    game = DinoGame(rng=random.Random(seed))
+    obstacle_spawn_x = (
+        LLM_OBSTACLE_SPAWN_X
+        if mode == "llm"
+        else NORMAL_OBSTACLE_SPAWN_X
+    )
+    game = DinoGame(rng=random.Random(seed), obstacle_spawn_x=obstacle_spawn_x)
     path = record_path_for_run(record_path, mode, seed, run_index, directory)
     return game, ReplayRecorder(path, seed, mode=mode)
 
@@ -1765,7 +2279,13 @@ class Renderer:
         """绘制暂停或恢复倒计时提示。"""
         self.draw_center_overlay(pause_overlay_lines(pause_state, now), color_pair=3)
 
-    def draw(self, game: DinoGame, agent_name: str, pause_state: PauseState | None = None, now: float | None = None):
+    def draw(
+            self,
+            game: DinoGame,
+            agent_name: str,
+            pause_state: PauseState | None = None,
+            now: float | None = None,
+            loading_text: str | None = None):
         """绘制完整的一帧画面
 
         绘制顺序（从后到前）:
@@ -1873,6 +2393,8 @@ class Renderer:
 
         if pause_state and pause_state.status != "running":
             self.draw_pause_overlay(pause_state, now if now is not None else time.monotonic())
+        elif loading_text:
+            self.draw_center_overlay([loading_text], color_pair=6)
 
         # ── 底部操作提示 ──
         hint = footer_hint(agent_name, game.speed)
@@ -1992,12 +2514,22 @@ def main(stdscr, cli_args: CliArgs | None = None):
         agent_name = "Replay"
     elif cli_args.mode == "llm":
         try:
-            agent = LLMAgent()
-            agent_name = "LLM Agent (Claude)"
+            debug_path = (
+                debug_log_path_for_replay(recorder.path)
+                if cli_args.llm_debug and recorder
+                else None
+            )
+            agent = LLMAgent(
+                cli_args.llm_config,
+                debug=cli_args.llm_debug,
+                debug_path=debug_path,
+            )
+            agent_name = "LLM Agent (OpenAI)"
         except ValueError:
+            # TODO: 没有 API key 时，给出提示 + 终止执行
             # 没有 API key，降级到规则 Agent
             agent = RuleAgent()
-            agent_name = "Rule Agent (no API key)"
+            agent_name = "Rule Agent (LLM config unavailable)"
     elif cli_args.mode == "agent":
         agent = RuleAgent()
         agent_name = "Rule Agent"
@@ -2031,6 +2563,10 @@ def main(stdscr, cli_args: CliArgs | None = None):
                     manual_input = ManualInputState()
                     pause_state = PauseState()
                     event_frame = 0
+                    if isinstance(agent, LLMAgent):
+                        agent.reset_plan()
+                        if cli_args.llm_debug and recorder:
+                            agent.set_debug_path(debug_log_path_for_replay(recorder.path))
                 renderer.draw(game, agent_name)
                 continue
 
@@ -2039,19 +2575,35 @@ def main(stdscr, cli_args: CliArgs | None = None):
                 continue
 
             # ── 输入处理 ──
-            event_frame += 1
+            next_frame = event_frame + 1
             if replay_player:
+                event_frame = next_frame
                 if not replay_player.has_frame(event_frame):
                     renderer.draw(game, agent_name)
                     continue
                 action = replay_player.action_for_frame(event_frame)
                 apply_game_action(game, action)
+            elif isinstance(agent, LLMAgent):
+                state = game.get_llm_state()
+                agent.ensure_plan(state, next_frame)
+                if agent.needs_loading(next_frame):
+                    renderer.draw(
+                        game,
+                        agent_name,
+                        loading_text="LLM planning next frames...",
+                    )
+                    continue
+                event_frame = next_frame
+                action = agent.decide(state, frame=event_frame)
+                apply_game_action(game, action)
             elif agent:
+                event_frame = next_frame
                 # Agent 模式: 读取状态 → 决策 → 执行动作
                 state = game.get_state()
                 action = agent.decide(state)
                 apply_game_action(game, action)
             else:
+                event_frame = next_frame
                 # 人类模式: 直接响应键盘
                 action = "none"
                 if key == ord(' ') or key == curses.KEY_UP:
@@ -2095,10 +2647,38 @@ def cli():
     if cli_args.show_help:
         print(cli_args.help_text)
         return
+    if cli_args.command == "config":
+        if cli_args.config_action == "setup":
+            run_config_setup()
+            return
+        if cli_args.config_action == "reset":
+            removed = reset_llm_config()
+            if removed:
+                print(f"Removed config {config_file_path()}")
+            else:
+                print(f"No config found at {config_file_path()}")
+            return
+        print(render_llm_config(load_llm_config()))
+        return
     if cli_args.command == "replay" and cli_args.replay_action == "clear":
         removed = clear_replay_files()
         print(f"已清除 {removed} 个 replay 记录文件")
         return
+    if cli_args.mode == "llm":
+        cli_args = CliArgs(
+            command=cli_args.command,
+            mode=cli_args.mode,
+            record_path=cli_args.record_path,
+            replay_path=cli_args.replay_path,
+            replay_action=cli_args.replay_action,
+            competition_path=cli_args.competition_path,
+            config_action=cli_args.config_action,
+            llm_config=resolve_llm_config_for_run(),
+            llm_debug=cli_args.llm_debug,
+            show_help=cli_args.show_help,
+            help_text=cli_args.help_text,
+            version=cli_args.version,
+        )
     curses.wrapper(main, cli_args)    # wrapper 自动处理 curses 初始化和清理
 
 

@@ -1,9 +1,11 @@
 import importlib
+import json
 import os
 import pathlib
 import tempfile
 import tomllib
 import unittest
+from unittest import mock
 
 
 class PackagingTest(unittest.TestCase):
@@ -76,6 +78,9 @@ class CliContractTest(unittest.TestCase):
         self.assertIn("replay", help_text)
         self.assertIn("Play, inspect, or clear replay records", help_text)
         self.assertIn("Competition", help_text)
+        self.assertIn("Config", help_text)
+        self.assertIn("config", help_text)
+        self.assertIn("View or update LLM configuration", help_text)
         self.assertIn("Help", help_text)
         self.assertIn("help", help_text)
         self.assertIn("--help, -H", help_text)
@@ -85,7 +90,8 @@ class CliContractTest(unittest.TestCase):
         self.assertNotRegex(help_text, r"[\u4e00-\u9fff]")
         self.assertLess(help_text.index("play"), help_text.index("agent"))
         self.assertLess(help_text.index("Replay"), help_text.index("Competition"))
-        self.assertLess(help_text.index("Competition"), help_text.index("Help"))
+        self.assertLess(help_text.index("Competition"), help_text.index("Config"))
+        self.assertLess(help_text.index("Config"), help_text.index("Help"))
 
     def test_subcommand_help_includes_command_specific_arguments(self):
         dino_game = self.dino_game()
@@ -93,6 +99,8 @@ class CliContractTest(unittest.TestCase):
         play_help = dino_game.render_command_help("play")
         replay_help = dino_game.render_command_help("replay")
         compete_help = dino_game.render_command_help("compete")
+        config_help = dino_game.render_command_help("config")
+        llm_help = dino_game.render_command_help("llm")
 
         self.assertIn("Usage: dino play [--record FILE]", play_help)
         self.assertIn("--record FILE", play_help)
@@ -102,7 +110,11 @@ class CliContractTest(unittest.TestCase):
         self.assertIn("FILE", replay_help)
         self.assertIn("Usage: dino compete [FILE] [--record FILE]", compete_help)
         self.assertIn("--record FILE", compete_help)
-        self.assertNotRegex(play_help + replay_help + compete_help, r"[\u4e00-\u9fff]")
+        self.assertIn("Usage: dino config", config_help)
+        self.assertIn("+setup", config_help)
+        self.assertIn("+reset", config_help)
+        self.assertIn("--debug", llm_help)
+        self.assertNotRegex(play_help + replay_help + compete_help + config_help + llm_help, r"[\u4e00-\u9fff]")
 
     def test_parse_cli_args_uses_new_subcommands_only(self):
         dino_game = self.dino_game()
@@ -111,11 +123,18 @@ class CliContractTest(unittest.TestCase):
         self.assertEqual(dino_game.parse_cli_args(["play"]).mode, "manual")
         self.assertEqual(dino_game.parse_cli_args(["agent"]).mode, "agent")
         self.assertEqual(dino_game.parse_cli_args(["llm"]).mode, "llm")
+        self.assertTrue(dino_game.parse_cli_args(["llm", "--debug"]).llm_debug)
+        self.assertFalse(dino_game.parse_cli_args(["play", "--debug"]).llm_debug)
+        self.assertTrue(dino_game.parse_cli_args(["play", "--debug"]).show_help)
         self.assertEqual(dino_game.parse_cli_args(["replay", "run.json"]).replay_path, "run.json")
         self.assertEqual(dino_game.parse_cli_args(["replay", "+list"]).replay_action, "list")
         self.assertEqual(dino_game.parse_cli_args(["replay", "+clear"]).replay_action, "clear")
         self.assertTrue(dino_game.parse_cli_args(["replay", "+unknown"]).show_help)
         self.assertEqual(dino_game.parse_cli_args(["compete", "run.json"]).competition_path, "run.json")
+        self.assertEqual(dino_game.parse_cli_args(["config"]).config_action, "show")
+        self.assertEqual(dino_game.parse_cli_args(["config", "+setup"]).config_action, "setup")
+        self.assertEqual(dino_game.parse_cli_args(["config", "+reset"]).config_action, "reset")
+        self.assertTrue(dino_game.parse_cli_args(["config", "+unknown"]).show_help)
         self.assertEqual(dino_game.parse_cli_args(["play", "--record", "run.json"]).record_path, "run.json")
         self.assertTrue(dino_game.parse_cli_args(["--agent"]).show_help)
         self.assertTrue(dino_game.parse_cli_args(["--replay", "run.json"]).show_help)
@@ -125,6 +144,7 @@ class CliContractTest(unittest.TestCase):
 
         self.assertEqual(dino_game.parse_cli_args(["help"]).help_text, dino_game.render_main_help())
         self.assertEqual(dino_game.parse_cli_args(["agent", "-H"]).help_text, dino_game.render_command_help("agent"))
+        self.assertEqual(dino_game.parse_cli_args(["config", "-H"]).help_text, dino_game.render_command_help("config"))
         self.assertEqual(dino_game.parse_cli_args(["foo"]).help_text, dino_game.render_main_help())
 
     def test_version_flags_return_project_version(self):
@@ -132,6 +152,604 @@ class CliContractTest(unittest.TestCase):
 
         self.assertEqual(dino_game.parse_cli_args(["--version"]).version, "0.1.0")
         self.assertEqual(dino_game.parse_cli_args(["play", "-V"]).version, "0.1.0")
+
+
+class LLMConfigTest(unittest.TestCase):
+    def dino_game(self):
+        return importlib.import_module("dino_game")
+
+    def test_config_file_path_uses_user_config_directory(self):
+        dino_game = self.dino_game()
+
+        self.assertEqual(
+            dino_game.config_file_path("/tmp/home"),
+            os.path.join("/tmp/home", ".config", "ai-dino-in-terminal", "config.json"),
+        )
+
+    def test_load_save_reset_and_render_llm_config(self):
+        dino_game = self.dino_game()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = pathlib.Path(temp_dir) / "config.json"
+            config = dino_game.LLMConfig(
+                api_key="sk-abcdefghijklmnopqrstuvwxyz",
+                base_url="https://example.test/v1",
+                model="gpt-test",
+            )
+
+            dino_game.save_llm_config(config, config_path)
+
+            self.assertEqual(dino_game.load_llm_config(config_path), config)
+            stored = json.loads(config_path.read_text())
+            self.assertEqual(stored["api_key"], "sk-abcdefghijklmnopqrstuvwxyz")
+
+            rendered = dino_game.render_llm_config(config)
+            self.assertIn("api_key: sk-a...wxyz", rendered)
+            self.assertNotIn("abcdefghijklmnopqrstuvwxyz", rendered)
+            self.assertIn("base_url: https://example.test/v1", rendered)
+            self.assertIn("model: gpt-test", rendered)
+
+            self.assertTrue(dino_game.reset_llm_config(config_path))
+            self.assertFalse(config_path.exists())
+            self.assertFalse(dino_game.reset_llm_config(config_path))
+
+    def test_prompt_for_llm_config_defaults_and_optional_persistence(self):
+        dino_game = self.dino_game()
+        answers = iter(["sk-test", "", "", ""])
+        messages = []
+
+        config, persist = dino_game.prompt_for_llm_config(
+            input_func=lambda prompt: next(answers),
+            output_func=messages.append,
+            ask_persist=True,
+        )
+
+        self.assertEqual(config.api_key, "sk-test")
+        self.assertEqual(config.base_url, dino_game.DEFAULT_OPENAI_BASE_URL)
+        self.assertEqual(config.model, dino_game.DEFAULT_OPENAI_MODEL)
+        self.assertFalse(persist)
+
+    def test_setup_flow_writes_without_asking_for_persistence(self):
+        dino_game = self.dino_game()
+        answers = iter(["sk-test", "https://example.test/v1", "gpt-test"])
+        messages = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = pathlib.Path(temp_dir) / "config.json"
+
+            config = dino_game.run_config_setup(
+                config_path=config_path,
+                input_func=lambda prompt: next(answers),
+                output_func=messages.append,
+            )
+
+            self.assertEqual(config.model, "gpt-test")
+            self.assertEqual(dino_game.load_llm_config(config_path), config)
+            self.assertTrue(any("Saved config" in message for message in messages))
+
+    def test_resolve_llm_config_prompts_and_only_persists_on_yes(self):
+        dino_game = self.dino_game()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = pathlib.Path(temp_dir) / "config.json"
+            answers = iter(["sk-session", "", "", "n"])
+
+            config = dino_game.resolve_llm_config_for_run(
+                config_path=config_path,
+                input_func=lambda prompt: next(answers),
+                output_func=lambda message: None,
+            )
+
+            self.assertEqual(config.api_key, "sk-session")
+            self.assertFalse(config_path.exists())
+
+            answers = iter(["sk-save", "", "", "y"])
+            config = dino_game.resolve_llm_config_for_run(
+                config_path=config_path,
+                input_func=lambda prompt: next(answers),
+                output_func=lambda message: None,
+            )
+
+            self.assertEqual(config.api_key, "sk-save")
+            self.assertEqual(dino_game.load_llm_config(config_path), config)
+
+
+class LLMAgentOpenAITest(unittest.TestCase):
+    def dino_game(self):
+        return importlib.import_module("dino_game")
+
+    def test_parse_llm_action_window_reads_json_actions_for_future_frames(self):
+        dino_game = self.dino_game()
+
+        actions = dino_game.parse_llm_action_window(
+            '{"start_frame": 10, "actions": ["none", "jump", "duck"]}',
+            requested_start_frame=10,
+        )
+
+        self.assertEqual(actions, {
+            10: "none",
+            11: "jump",
+            12: "duck",
+        })
+
+    def test_parse_llm_action_window_truncates_extra_actions_without_dropping_jump(self):
+        dino_game = self.dino_game()
+        response_actions = ["none"] * 84 + ["jump"] + ["none"] * 245
+
+        actions = dino_game.parse_llm_action_window(
+            json.dumps({"start_frame": 601, "actions": response_actions}),
+            requested_start_frame=601,
+            expected_action_count=300,
+        )
+
+        self.assertEqual(len(actions), 300)
+        self.assertEqual(actions[685], "jump")
+        self.assertEqual(actions[900], "none")
+        self.assertNotIn(901, actions)
+
+    def test_parse_llm_action_window_pads_short_actions_with_none(self):
+        dino_game = self.dino_game()
+
+        actions = dino_game.parse_llm_action_window(
+            '{"start_frame": 10, "actions": ["jump"]}',
+            requested_start_frame=10,
+            expected_action_count=2,
+        )
+
+        self.assertEqual(actions, {
+            10: "jump",
+            11: "none",
+        })
+
+    def test_llm_action_window_text_format_constrains_start_and_action_count(self):
+        dino_game = self.dino_game()
+
+        text_format = dino_game.llm_action_window_text_format(42, 5)
+
+        self.assertEqual(text_format["type"], "json_schema")
+        self.assertEqual(text_format["name"], "dino_action_window")
+        self.assertTrue(text_format["strict"])
+        schema = text_format["schema"]
+        self.assertEqual(schema["properties"]["start_frame"]["enum"], [42])
+        self.assertEqual(schema["properties"]["actions"]["minItems"], 5)
+        self.assertEqual(schema["properties"]["actions"]["maxItems"], 5)
+        self.assertEqual(
+            schema["properties"]["actions"]["items"]["enum"],
+            ["jump", "duck", "none"],
+        )
+
+    def test_parse_llm_action_window_rejects_wrong_start_frame_and_bad_actions(self):
+        dino_game = self.dino_game()
+
+        self.assertEqual(
+            dino_game.parse_llm_action_window(
+                '{"start_frame": 11, "actions": ["jump"]}',
+                requested_start_frame=10,
+            ),
+            {},
+        )
+        self.assertEqual(
+            dino_game.parse_llm_action_window(
+                '{"start_frame": 10, "actions": ["jump", "spin"]}',
+                requested_start_frame=10,
+            ),
+            {},
+        )
+
+    def test_llm_agent_waits_when_current_frame_has_no_buffered_action(self):
+        dino_game = self.dino_game()
+        config = dino_game.LLMConfig(
+            api_key="sk-test",
+            base_url="https://example.test/v1",
+            model="gpt-test",
+        )
+        agent = dino_game.LLMAgent(config)
+
+        self.assertTrue(agent.needs_loading(5))
+
+        with agent.lock:
+            agent.planned_actions[5] = "jump"
+
+        self.assertFalse(agent.needs_loading(5))
+        self.assertEqual(agent.decide({
+            "dino_y": 0.0,
+            "jumping": False,
+            "ducking": False,
+            "speed": 1.0,
+            "score": 0,
+            "obstacles": [],
+        }, frame=5), "jump")
+        self.assertTrue(agent.needs_loading(5))
+
+    def test_llm_action_window_covers_ten_seconds(self):
+        dino_game = self.dino_game()
+
+        self.assertEqual(
+            dino_game.LLM_ACTION_WINDOW_FRAMES,
+            dino_game.FPS * 10,
+        )
+
+    def test_llm_agent_skips_api_when_window_state_has_no_obstacles(self):
+        dino_game = self.dino_game()
+        config = dino_game.LLMConfig(
+            api_key="sk-test",
+            base_url="https://example.test/v1",
+            model="gpt-test",
+        )
+        agent = dino_game.LLMAgent(config)
+        empty_state = {
+            "dino_y": 0.0,
+            "jumping": False,
+            "ducking": False,
+            "speed": 1.0,
+            "score": 0,
+            "obstacles": [],
+        }
+
+        with mock.patch("threading.Thread") as thread_class:
+            agent.ensure_plan(empty_state, 10)
+
+        thread_class.assert_not_called()
+        with agent.lock:
+            self.assertEqual(agent.planned_actions[10], "none")
+            self.assertEqual(
+                agent.planned_actions[10 + dino_game.LLM_ACTION_WINDOW_FRAMES - 1],
+                "none",
+            )
+            self.assertEqual(
+                agent.requested_until_frame,
+                10 + dino_game.LLM_ACTION_WINDOW_FRAMES - 1,
+            )
+            self.assertFalse(agent.request_in_flight)
+
+    def test_llm_agent_ignores_forecast_frames_when_top_level_has_no_obstacles(self):
+        dino_game = self.dino_game()
+        config = dino_game.LLMConfig(
+            api_key="sk-test",
+            base_url="https://example.test/v1",
+            model="gpt-test",
+        )
+        agent = dino_game.LLMAgent(config)
+        forecast_state = {
+            "dino_y": 0.0,
+            "jumping": False,
+            "ducking": False,
+            "speed": 1.0,
+            "score": 0,
+            "obstacles": [],
+            "frames": [{
+                "frame": 10,
+                "obstacles": [{"kind": "cactus_group", "distance": 100}],
+            }],
+        }
+
+        with mock.patch("threading.Thread") as thread_class:
+            agent.ensure_plan(forecast_state, 10)
+
+        thread_class.assert_not_called()
+
+    def test_openai_responses_request_uses_config_and_parses_action_window(self):
+        dino_game = self.dino_game()
+        config = dino_game.LLMConfig(
+            api_key="sk-test",
+            base_url="https://example.test/v1",
+            model="gpt-test",
+        )
+        agent = dino_game.LLMAgent(config)
+        captured = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    "output_text": json.dumps({
+                        "start_frame": 7,
+                        "actions": ["jump", "none"],
+                    }),
+                }).encode()
+
+        def fake_urlopen(req, timeout):
+            captured["url"] = req.full_url
+            captured["headers"] = dict(req.header_items())
+            captured["payload"] = json.loads(req.data.decode())
+            captured["timeout"] = timeout
+            return FakeResponse()
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            agent._call_llm(
+                {
+                    "dino_y": 0.0,
+                    "jumping": False,
+                    "ducking": False,
+                    "speed": 1.0,
+                    "score": 0,
+                    "obstacles": [{"kind": "cactus_group", "distance": 42}],
+                },
+                start_frame=7,
+                window_frames=2,
+            )
+
+        self.assertEqual(captured["url"], "https://example.test/v1/responses")
+        self.assertEqual(captured["headers"]["Authorization"], "Bearer sk-test")
+        self.assertEqual(captured["payload"]["model"], "gpt-test")
+        self.assertIn("input", captured["payload"])
+        self.assertIn('"start_frame": 7', captured["payload"]["input"])
+        self.assertIn("2 actions", captured["payload"]["input"])
+        self.assertNotIn("未来 2 帧状态", captured["payload"]["input"])
+        self.assertNotIn('"frames"', captured["payload"]["input"])
+        text_format = captured["payload"]["text"]["format"]
+        self.assertEqual(text_format["type"], "json_schema")
+        self.assertEqual(text_format["name"], "dino_action_window")
+        self.assertTrue(text_format["strict"])
+        schema = text_format["schema"]
+        self.assertEqual(schema["required"], ["start_frame", "actions"])
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(
+            schema["properties"]["start_frame"],
+            {"type": "integer", "enum": [7]},
+        )
+        actions_schema = schema["properties"]["actions"]
+        self.assertEqual(actions_schema["type"], "array")
+        self.assertEqual(actions_schema["minItems"], 2)
+        self.assertEqual(actions_schema["maxItems"], 2)
+        self.assertEqual(
+            actions_schema["items"],
+            {"type": "string", "enum": ["jump", "duck", "none"]},
+        )
+        self.assertEqual(captured["timeout"], 60)
+        with agent.lock:
+            self.assertEqual(agent.planned_actions[7], "jump")
+            self.assertEqual(agent.planned_actions[8], "none")
+
+    def test_openai_responses_request_reports_actual_current_frame_for_prefetch(self):
+        dino_game = self.dino_game()
+        config = dino_game.LLMConfig(
+            api_key="sk-test",
+            base_url="https://example.test/v1",
+            model="gpt-test",
+        )
+        agent = dino_game.LLMAgent(config)
+        captured = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    "output_text": json.dumps({
+                        "start_frame": 601,
+                        "actions": ["none", "jump"],
+                    }),
+                }).encode()
+
+        def fake_urlopen(req, timeout):
+            captured["payload"] = json.loads(req.data.decode())
+            return FakeResponse()
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            agent._call_llm(
+                {
+                    "dino_y": 0.0,
+                    "jumping": False,
+                    "ducking": False,
+                    "speed": 2.04,
+                    "score": 579,
+                    "obstacles": [{"kind": "cactus_group", "distance": 232.9}],
+                },
+                start_frame=601,
+                current_frame=580,
+                window_frames=2,
+            )
+
+        prompt = captured["payload"]["input"]
+        self.assertIn("当前帧: 580", prompt)
+        self.assertIn("需要返回的第一帧 start_frame: 601", prompt)
+        self.assertIn("start_frame 距当前状态还有 21 帧", prompt)
+        self.assertNotIn("当前帧: 600", prompt)
+        self.assertIn("一次 jump 约持续 17 帧", prompt)
+        self.assertIn("重复 jump 不会延长滞空", prompt)
+        self.assertIn("速度每帧增加 0.0005", prompt)
+        self.assertIn("最大速度 3.8", prompt)
+        self.assertIn("distance <= 6", prompt)
+        self.assertIn("estimated_overlap_frame=690", prompt)
+        self.assertIn("recommended_jump_start=676-688", prompt)
+
+    def test_llm_state_uses_large_obstacle_window_without_frames(self):
+        dino_game = self.dino_game()
+        game = dino_game.DinoGame()
+        game.obstacles = [
+            dino_game.Obstacle(
+                "cactus_group",
+                dino_game.DINO_COL + dino_game.LLM_STATE_LOOKAHEAD - 1,
+            )
+        ]
+
+        state = game.get_llm_state()
+
+        self.assertNotIn("frames", state)
+        self.assertEqual(len(state["obstacles"]), 1)
+        self.assertGreaterEqual(
+            dino_game.LLM_STATE_LOOKAHEAD,
+            dino_game.MAX_SPEED * dino_game.LLM_ACTION_WINDOW_FRAMES,
+        )
+
+    def test_llm_request_ranges_are_recorded_without_overlap_or_gaps(self):
+        dino_game = self.dino_game()
+        config = dino_game.LLMConfig(
+            api_key="sk-test",
+            base_url="https://example.test/v1",
+            model="gpt-test",
+        )
+        agent = dino_game.LLMAgent(config)
+        obstacle_state = {
+            "dino_y": 0.0,
+            "jumping": False,
+            "ducking": False,
+            "speed": 1.0,
+            "score": 0,
+            "obstacles": [{"kind": "cactus_group", "distance": 100}],
+        }
+
+        with mock.patch("threading.Thread"):
+            agent.ensure_plan(obstacle_state, 10)
+        with agent.lock:
+            agent.request_in_flight = False
+            agent.requested_until_frame = 10 + dino_game.LLM_ACTION_WINDOW_FRAMES - 1
+        with mock.patch("threading.Thread"):
+            agent.ensure_plan(
+                obstacle_state,
+                10 + dino_game.LLM_ACTION_WINDOW_FRAMES - dino_game.LLM_PREFETCH_THRESHOLD_FRAMES,
+            )
+
+        self.assertEqual(agent.requested_frame_ranges, [
+            (10, 10 + dino_game.LLM_ACTION_WINDOW_FRAMES - 1),
+            (
+                10 + dino_game.LLM_ACTION_WINDOW_FRAMES,
+                10 + dino_game.LLM_ACTION_WINDOW_FRAMES * 2 - 1,
+            ),
+        ])
+
+    def test_llm_prefetch_passes_actual_current_frame_to_background_request(self):
+        dino_game = self.dino_game()
+        config = dino_game.LLMConfig(
+            api_key="sk-test",
+            base_url="https://example.test/v1",
+            model="gpt-test",
+        )
+        agent = dino_game.LLMAgent(config)
+        agent.requested_until_frame = 600
+        obstacle_state = {
+            "dino_y": 0.0,
+            "jumping": False,
+            "ducking": False,
+            "speed": 2.0,
+            "score": 579,
+            "obstacles": [{"kind": "cactus_group", "distance": 232.9}],
+        }
+
+        with mock.patch("threading.Thread") as thread_class:
+            agent.ensure_plan(obstacle_state, 581)
+
+        thread_kwargs = thread_class.call_args.kwargs["kwargs"]
+        self.assertEqual(thread_kwargs["start_frame"], 601)
+        self.assertEqual(thread_kwargs["current_frame"], 580)
+
+    def test_llm_debug_writes_request_and_response_json_lines_to_file(self):
+        dino_game = self.dino_game()
+        config = dino_game.LLMConfig(
+            api_key="sk-test",
+            base_url="https://example.test/v1",
+            model="gpt-test",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = pathlib.Path(temp_dir) / "logs" / "run.json"
+            agent = dino_game.LLMAgent(config, debug=True, debug_path=log_path)
+
+            class FakeResponse:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, traceback):
+                    return False
+
+                def read(self):
+                    return json.dumps({
+                        "output_text": json.dumps({
+                            "start_frame": 3,
+                            "actions": ["none", "jump"],
+                        }),
+                    }).encode()
+
+            with mock.patch("urllib.request.urlopen", return_value=FakeResponse()):
+                agent._call_llm(
+                    {
+                        "dino_y": 0.0,
+                        "jumping": False,
+                        "ducking": False,
+                        "speed": 1.0,
+                        "score": 0,
+                        "obstacles": [{"kind": "cactus_group", "distance": 42}],
+                    },
+                    start_frame=3,
+                    window_frames=2,
+                )
+
+            self.assertTrue(log_path.exists())
+            lines = [json.loads(line) for line in log_path.read_text().splitlines()]
+        self.assertEqual(lines[0]["event"], "llm_request")
+        self.assertEqual(lines[0]["start_frame"], 3)
+        self.assertEqual(lines[0]["window_frames"], 2)
+        self.assertEqual(lines[0]["state"]["obstacles"][0]["distance"], 42)
+        self.assertIn("payload", lines[0])
+        self.assertEqual(lines[1]["event"], "llm_response")
+        self.assertEqual(lines[1]["planned_actions"], {"3": "none", "4": "jump"})
+        self.assertIn("raw_response", lines[1])
+
+    def test_debug_log_path_uses_logs_directory_and_replay_filename(self):
+        dino_game = self.dino_game()
+
+        self.assertEqual(
+            dino_game.debug_log_path_for_replay("replays/20260527-llm-123.json"),
+            os.path.join("logs", "20260527-llm-123.json"),
+        )
+
+    def test_llm_fallback_window_becomes_the_requested_coverage(self):
+        dino_game = self.dino_game()
+        config = dino_game.LLMConfig(
+            api_key="sk-test",
+            base_url="https://example.test/v1",
+            model="gpt-test",
+        )
+        agent = dino_game.LLMAgent(config)
+        agent.requested_until_frame = 60
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return json.dumps({"output_text": "not json"}).encode()
+
+        with mock.patch("urllib.request.urlopen", return_value=FakeResponse()):
+            agent._call_llm(
+                {
+                    "dino_y": 0.0,
+                    "jumping": False,
+                    "ducking": False,
+                    "speed": 1.0,
+                    "score": 0,
+                    "obstacles": [],
+                },
+                start_frame=1,
+                window_frames=60,
+            )
+
+        self.assertEqual(
+            agent.requested_until_frame,
+            60,
+        )
+
+    def test_extract_response_text_supports_structured_output(self):
+        dino_game = self.dino_game()
+
+        text = dino_game.extract_response_text({
+            "output": [{
+                "content": [
+                    {"type": "output_text", "text": "duck"},
+                ],
+            }],
+        })
+
+        self.assertEqual(text, "duck")
 
 
 class GameTuningTest(unittest.TestCase):
@@ -162,6 +780,29 @@ class GameTuningTest(unittest.TestCase):
 
         self.assertGreaterEqual(crossing_seconds, 1.1)
         self.assertLessEqual(crossing_seconds, 1.6)
+
+    def test_llm_game_spawns_obstacles_farther_ahead(self):
+        dino_game = importlib.import_module("dino_game")
+        game = dino_game.DinoGame(obstacle_spawn_x=dino_game.LLM_OBSTACLE_SPAWN_X)
+        game.score = 0
+
+        game._spawn_obstacle()
+
+        self.assertEqual(game.obstacles[0].x, dino_game.LLM_OBSTACLE_SPAWN_X)
+        self.assertGreater(game.obstacles[0].x, dino_game.NORMAL_OBSTACLE_SPAWN_X)
+
+    def test_llm_state_includes_farther_obstacles_than_default_state(self):
+        dino_game = importlib.import_module("dino_game")
+        game = dino_game.DinoGame()
+        game.obstacles = [
+            dino_game.Obstacle("cactus_group", dino_game.LLM_OBSTACLE_SPAWN_X),
+        ]
+
+        self.assertEqual(game.get_state()["obstacles"], [])
+        self.assertEqual(
+            game.get_llm_state()["obstacles"][0]["x"],
+            dino_game.LLM_OBSTACLE_SPAWN_X,
+        )
 
     def test_rule_agent_waits_until_jump_window_after_speed_tuning(self):
         dino_game = importlib.import_module("dino_game")

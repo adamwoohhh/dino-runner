@@ -113,7 +113,7 @@ dino_game.py
 ├── Obstacle       障碍物实体和碰撞箱
 ├── DinoGame       游戏引擎、物理、碰撞、生成、状态导出
 ├── RuleAgent      基于距离阈值的规则 Agent
-├── LLMAgent       Claude API Agent
+├── LLMAgent       OpenAI Responses API Agent
 ├── ReplayRecorder/ReplayPlayer
 ├── Renderer       curses 终端渲染器
 ├── main()         游戏主循环
@@ -172,12 +172,25 @@ state = game.get_state()
 
 ## LLMAgent
 
-`LLMAgent` 使用 Anthropic Messages API：
+`LLMAgent` 使用 OpenAI Responses API：
 
 - 每隔约 `0.8s` 发起一次请求。
 - 请求在后台线程执行，不阻塞游戏主循环。
 - API 请求 timeout 是 `5s`。
 - 每帧消费上一次已返回的缓存动作。
+
+LLM 配置文件固定为 `~/.config/ai-dino-in-terminal/config.json`：
+
+```json
+{
+  "api_key": "sk-...",
+  "base_url": "https://api.openai.com/v1",
+  "model": "gpt-5-mini"
+}
+```
+
+可以用 `dino config` 查看配置，`dino config +setup` 交互式写入配置，`dino config +reset` 重置配置。
+`dino llm` 启动时如果配置缺失，会在进入 curses 前提示输入；输入后默认不保存，仅本次使用，用户回答 `y` 才会写入本地配置。
 
 因此 LLM 模式用于演示“模型读取结构化状态并决策”，不是实时游戏的最佳策略。接口慢返回或失败时，游戏仍继续推进；失败动作会降级为 `none`。
 
