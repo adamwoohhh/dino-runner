@@ -144,7 +144,7 @@ def resolve_llm_config_for_run(
         config_path: str | os.PathLike | None = None,
         input_func=input,
         output_func=print) -> LLMConfig:
-    """Load config for `dino llm`, prompting if required values are absent."""
+    """Load config for `dino play --llm`, prompting if required values are absent."""
     path = config_path or config_file_path()
     config = load_llm_config(path)
     if config.is_complete():

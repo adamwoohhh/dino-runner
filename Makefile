@@ -1,4 +1,4 @@
-.PHONY: venv install dev-install test check build check-dist publish-test publish run compete agent llm clean
+.PHONY: venv install dev-install test check build check-dist publish-test publish run compete auto llm clean
 
 SYSTEM_PYTHON ?= python3
 VENV ?= .venv
@@ -40,11 +40,11 @@ run:
 compete:
 	$(DINO) compete
 
-agent:
-	$(DINO) agent
+auto:
+	$(DINO) play --auto
 
 llm:
-	$(DINO) llm
+	$(DINO) play --llm
 
 clean:
 	rm -rf __pycache__ tests/__pycache__ *.egg-info build dist

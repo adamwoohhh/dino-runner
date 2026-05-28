@@ -2,7 +2,7 @@
 
 ## Goal
 
-Make `dino llm` resilient to model/API latency by asking the model for a future window of per-frame actions, pausing game simulation when the action plan is exhausted, and exposing obstacles earlier than the normal screen spawn point.
+Make `dino play --llm` resilient to model/API latency by asking the model for a future window of per-frame actions, pausing game simulation when the action plan is exhausted, and exposing obstacles earlier than the normal screen spawn point.
 
 ## Behavior
 
@@ -17,4 +17,3 @@ Make `dino llm` resilient to model/API latency by asking the model for a future 
 ## Scope
 
 Only `dino_game.py`, tests, and this design/plan documentation change. Replay files continue recording only actual executed frames and actions; loading waits are not replay frames.
-

@@ -290,8 +290,8 @@ class ReplayTest(unittest.TestCase):
 
         self.assertEqual(dino_game.game_mode_from_args([]), "manual")
         self.assertEqual(dino_game.game_mode_from_args(["play"]), "manual")
-        self.assertEqual(dino_game.game_mode_from_args(["agent"]), "agent")
-        self.assertEqual(dino_game.game_mode_from_args(["llm"]), "llm")
+        self.assertEqual(dino_game.game_mode_from_args(["play", "--auto"]), "agent")
+        self.assertEqual(dino_game.game_mode_from_args(["play", "--llm"]), "llm")
         self.assertEqual(dino_game.game_mode_from_args(["compete"]), "competitive")
 
     def test_competition_source_path_accepts_positional_arg_only(self):

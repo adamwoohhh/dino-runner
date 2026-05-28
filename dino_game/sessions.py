@@ -49,10 +49,7 @@ class CompetitionSession:
 
     def run(self):
         replay_player = ReplayPlayer.from_file(self.replay_path)
-        record_path = (
-            self.cli_args.record_path
-            or default_replay_path("competitive", replay_player.seed)
-        )
+        record_path = default_replay_path("competitive", replay_player.seed)
         competition = CompetitionRun(
             replay_player,
             source_replay=self.replay_path,
@@ -87,7 +84,7 @@ class PlaySession:
             return DinoGame(rng=random.Random(self.replay_player.seed)), None
         return start_recording_run(
             self.mode,
-            self.cli_args.record_path,
+            None,
             self.run_index,
         )
 

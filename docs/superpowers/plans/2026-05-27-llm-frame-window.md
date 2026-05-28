@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `dino llm` request future per-frame action windows and pause the simulation when the buffer runs dry.
+**Goal:** Make `dino play --llm` request future per-frame action windows and pause the simulation when the buffer runs dry.
 
 **Architecture:** Keep the single-module structure. Add small helper functions/constants for LLM lookahead state, JSON action window parsing, and waiting decisions; update `LLMAgent` from a single pending action to a frame-indexed buffer; thread the LLM-specific spawn position into game creation.
 
@@ -40,4 +40,3 @@
 - [ ] Thread spawn X through `DinoGame` and use the larger value for LLM recording runs.
 - [ ] Render loading state and skip frame advancement while waiting.
 - [ ] Run focused tests and `python3 -m py_compile dino_game.py`.
-

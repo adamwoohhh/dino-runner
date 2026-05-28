@@ -2,7 +2,7 @@
 
 ## Goal
 
-Move `dino llm` from the Anthropic Messages API to the OpenAI Responses API and add local interactive configuration management.
+Move `dino play --llm` from the Anthropic Messages API to the OpenAI Responses API and add local interactive configuration management.
 
 ## Configuration
 
@@ -32,7 +32,7 @@ The file contains JSON:
 
 `dino config +reset` removes the config file if it exists and reports the result.
 
-`dino llm` reads the config before curses starts. If required values are missing, it prompts for them. After collecting values, it asks whether to persist them. The default is `N`, which means the collected config is used only for the current run. Choosing `y` writes the config file.
+`dino play --llm` reads the config before curses starts. If required values are missing, it prompts for them. After collecting values, it asks whether to persist them. The default is `N`, which means the collected config is used only for the current run. Choosing `y` writes the config file.
 
 ## LLM Agent
 

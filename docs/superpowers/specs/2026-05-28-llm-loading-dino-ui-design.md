@@ -2,7 +2,7 @@
 
 ## Goal
 
-Show a front-facing blinking dino while `dino llm` is waiting for the model, without changing game physics, collision boxes, replay timing, or normal non-loading sprite behavior.
+Show a front-facing blinking dino while `dino play --llm` is waiting for the model, without changing game physics, collision boxes, replay timing, or normal non-loading sprite behavior.
 
 ## Approved Visual Direction
 

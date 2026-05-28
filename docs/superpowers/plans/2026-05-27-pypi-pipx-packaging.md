@@ -192,11 +192,11 @@ dino
 dino
 
 # 规则 Agent 自动玩
-dino --agent
+dino play --auto
 
-# Claude LLM Agent 自动玩
-export ANTHROPIC_API_KEY=sk-ant-...
-dino --llm
+# LLM Agent 自动玩
+dino config +setup
+dino play --llm
 
 # 选择历史运行记录并重放
 dino replay
@@ -209,13 +209,13 @@ dino compete
 
 ```bash
 python3 dino_game.py
-python3 dino_game.py --agent
-python3 dino_game.py --llm
-python3 dino_game.py replay
-python3 dino_game.py compete
-python3 dino_game.py --record run.json
-python3 dino_game.py --replay run.json
-python3 dino_game.py --compete run.json
+python3 -m dino_game.cli play --auto
+python3 -m dino_game.cli play --llm
+python3 -m dino_game.cli replay
+python3 -m dino_game.cli compete
+python3 -m dino_game.cli play
+python3 -m dino_game.cli replay run.json
+python3 -m dino_game.cli compete run.json
 ```
 ````
 
@@ -339,11 +339,11 @@ run:
 compete:
 	$(DINO) compete
 
-agent:
-	$(DINO) --agent
+auto:
+	$(DINO) play --auto
 
 llm:
-	$(DINO) --llm
+	$(DINO) play --llm
 
 clean:
 	rm -rf __pycache__ tests/__pycache__ *.egg-info build dist

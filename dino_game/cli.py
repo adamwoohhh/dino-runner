@@ -24,7 +24,6 @@ class CliArgs:
 
     command: str = "play"
     mode: str = "manual"
-    record_path: str | None = None
     replay_path: str | None = None
     replay_action: str = "play"
     competition_path: str | None = None
@@ -37,9 +36,7 @@ class CliArgs:
 
 COMMAND_GROUPS = [
     ("Core", [
-        ("play", "Start a manual game"),
-        ("agent", "Run with the local rule-based agent"),
-        ("llm", "Run with the OpenAI LLM agent"),
+        ("play", "Start a manual, auto, or LLM game"),
     ]),
     ("Replay", [
         ("replay", "Play, inspect, or clear replay records"),
@@ -59,12 +56,6 @@ COMMAND_DESCRIPTIONS = {
     name: description
     for _, commands in COMMAND_GROUPS
     for name, description in commands
-}
-
-RUN_COMMAND_MODES = {
-    "play": "manual",
-    "agent": "agent",
-    "llm": "llm",
 }
 
 HELP_FLAGS = {"--help", "-H"}
@@ -103,16 +94,12 @@ def render_main_help() -> str:
 def render_command_help(command: str) -> str:
     """渲染某个子命令的完整用法和参数。"""
     if command == "play":
-        usage = "dino play [--record FILE]"
-        options = ["  --record FILE    Write the replay recording to FILE"]
-    elif command == "agent":
-        usage = "dino agent [--record FILE]"
-        options = ["  --record FILE    Write the replay recording to FILE"]
-    elif command == "llm":
-        usage = "dino llm [--record FILE] [--debug]"
+        usage = "dino play [--auto|--llm] [--debug]"
         options = [
-            "  --record FILE    Write the replay recording to FILE",
-            "  --debug          Write LLM request and response JSON lines to logs/",
+            "  --auto           Run with the local rule-based agent",
+            "  --llm            Run with the OpenAI LLM agent",
+            "  --debug          With --llm, write request and response JSON lines to logs/",
+            "  Replay saving is offered after Game Over",
         ]
     elif command == "replay":
         usage = "dino replay [FILE]"
@@ -126,10 +113,9 @@ def render_command_help(command: str) -> str:
             "  dino replay +clear",
         ]
     elif command == "compete":
-        usage = "dino compete [FILE] [--record FILE]"
+        usage = "dino compete [FILE]"
         options = [
             "  FILE             Start competition from FILE; omit it to choose from a list",
-            "  --record FILE    Write the competition replay recording to FILE",
         ]
     elif command == "config":
         usage = "dino config [+setup|+reset]"
@@ -161,23 +147,6 @@ def render_command_help(command: str) -> str:
         "  --version, -V    Show the tool version",
     ]
     return "\n".join(lines)
-
-def _split_record_option(args: list[str]) -> tuple[str | None, list[str]]:
-    """从参数列表中取出 --record FILE，并返回剩余参数。"""
-    record_path = None
-    remaining = []
-    index = 0
-    while index < len(args):
-        arg = args[index]
-        if arg == "--record":
-            if index + 1 >= len(args) or args[index + 1].startswith("-"):
-                raise ValueError("--record 需要一个文件路径")
-            record_path = args[index + 1]
-            index += 2
-            continue
-        remaining.append(arg)
-        index += 1
-    return record_path, remaining
 
 def _split_debug_option(args: list[str]) -> tuple[bool, list[str]]:
     """从参数列表中取出 --debug，并返回剩余参数。"""
@@ -211,17 +180,27 @@ def parse_cli_args(args: list[str]) -> CliArgs:
     if any(arg in HELP_FLAGS for arg in command_args):
         return CliArgs(command=command, show_help=True, help_text=render_command_help(command))
 
-    if command in RUN_COMMAND_MODES:
-        record_path, remaining = _split_record_option(command_args)
-        llm_debug = False
-        if command == "llm":
-            llm_debug, remaining = _split_debug_option(remaining)
-        if remaining:
+    if command == "play":
+        llm_debug, remaining = _split_debug_option(command_args)
+        auto_requested = "--auto" in remaining
+        llm_requested = "--llm" in remaining
+        remaining = [
+            arg for arg in remaining
+            if arg not in {"--auto", "--llm"}
+        ]
+        if (
+                remaining
+                or (auto_requested and llm_requested)
+                or (llm_debug and not llm_requested)):
             return CliArgs(command=command, show_help=True, help_text=render_command_help(command))
+        mode = "manual"
+        if auto_requested:
+            mode = "agent"
+        if llm_requested:
+            mode = "llm"
         return CliArgs(
             command=command,
-            mode=RUN_COMMAND_MODES[command],
-            record_path=record_path,
+            mode=mode,
             llm_debug=llm_debug,
         )
 
@@ -238,14 +217,12 @@ def parse_cli_args(args: list[str]) -> CliArgs:
         return CliArgs(command=command, replay_path=replay_path)
 
     if command == "compete":
-        record_path, remaining = _split_record_option(command_args)
-        if len(remaining) > 1 or any(arg.startswith("-") for arg in remaining):
+        if len(command_args) > 1 or any(arg.startswith("-") for arg in command_args):
             return CliArgs(command=command, show_help=True, help_text=render_command_help(command))
-        competition_path = remaining[0] if remaining else None
+        competition_path = command_args[0] if command_args else None
         return CliArgs(
             command=command,
             mode="competitive",
-            record_path=record_path,
             competition_path=competition_path,
         )
 
@@ -271,15 +248,6 @@ def is_competition_mode(args: list[str]) -> bool:
 def competition_source_path(args: list[str]) -> str | None:
     """从竞技模式参数中读取源 replay 路径；缺省时由 UI 菜单选择。"""
     return parse_cli_args(args).competition_path
-
-def arg_value(args: list[str], flag: str) -> str | None:
-    """从命令行参数中读取形如 `--flag path` 的值。"""
-    if flag not in args:
-        return None
-    index = args.index(flag)
-    if index + 1 >= len(args):
-        raise ValueError(f"{flag} 需要一个文件路径")
-    return args[index + 1]
 
 def cli():
     """Command-line entrypoint for the terminal dino game."""
@@ -311,7 +279,6 @@ def cli():
         cli_args = CliArgs(
             command=cli_args.command,
             mode=cli_args.mode,
-            record_path=cli_args.record_path,
             replay_path=cli_args.replay_path,
             replay_action=cli_args.replay_action,
             competition_path=cli_args.competition_path,

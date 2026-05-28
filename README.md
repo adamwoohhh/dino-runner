@@ -28,11 +28,12 @@ dino
 dino play
 
 # 规则 Agent 自动玩
-dino agent
+dino play --auto
 
 # OpenAI LLM Agent 自动玩
 dino config +setup
-dino llm
+dino play --llm
+dino play --llm --debug
 
 # 查看或重置 LLM 配置
 dino config
@@ -61,8 +62,9 @@ dino --version
 ```bash
 python3 -m dino_game.cli
 python3 -m dino_game.cli play
-python3 -m dino_game.cli agent
-python3 -m dino_game.cli llm
+python3 -m dino_game.cli play --auto
+python3 -m dino_game.cli play --llm
+python3 -m dino_game.cli play --llm --debug
 python3 -m dino_game.cli config
 python3 -m dino_game.cli config +setup
 python3 -m dino_game.cli config +reset
@@ -79,8 +81,9 @@ python3 -m dino_game.cli compete run.json
 | 命令 | 说明 | 依赖 |
 |------|------|------|
 | `dino` / `dino play` | 手动操作恐龙 | 无 |
-| `dino agent` | 使用本地规则 Agent 自动决策 | 无 |
-| `dino llm` | 使用 OpenAI Responses API 决策 | `~/.config/ai-dino-in-terminal/config.json` 或启动时交互输入 |
+| `dino play --auto` | 使用本地规则 Agent 自动决策 | 无 |
+| `dino play --llm` | 使用 OpenAI Responses API 决策 | `~/.config/ai-dino-in-terminal/config.json` 或启动时交互输入 |
+| `dino play --llm --debug` | 使用 LLM 决策并写调试日志 | `logs/*.json` |
 | `dino replay` | 从历史运行记录列表选择并重放 | `replays/*.json` |
 | `dino replay run.json` | 直接从指定文件重放 | 对应 replay 文件 |
 | `dino replay +list` | 浏览所有 replay 文件，回车查看元信息 | `replays/*.json` |
@@ -90,18 +93,14 @@ python3 -m dino_game.cli compete run.json
 | `dino config` | 查看本地 LLM 配置（API key 脱敏显示） | 无 |
 | `dino config +setup` | 交互式写入本地 LLM 配置 | OpenAI-compatible API key |
 | `dino config +reset` | 重置本地 LLM 配置 | 无 |
-| `dino play --record run.json` | 指定录制文件路径 | 无 |
 | `dino help` | 查看可用命令和公共参数 | 无 |
 
 LLM 配置文件固定保存在 `~/.config/ai-dino-in-terminal/config.json`。
-如果 `dino llm` 缺少必要配置，启动游戏前会提示输入 `api_key`、`base_url` 和 `model`；
+如果 `dino play --llm` 缺少必要配置，启动游戏前会提示输入 `api_key`、`base_url` 和 `model`；
 输入完成后会询问是否持久化到本地配置，默认 `N`，仅本次运行使用。
 
-默认每次运行都会记录到 `replays/` 目录，文件名形如
-`20260527-153012-manual-123456.json`，其中包含运行模式 `manual`、`agent`
-或 `llm`。Replay 文件是 JSON，包含随机种子、运行模式、总帧数、`actions` 和 `obstacles`；
-两组数据都使用 `{"frame": number, "action": ...}` 结构，`actions` 不记录 `none` 帧。重放时按记录数据推进游戏，不再依赖随机生成障碍物。
-每局只在 Game Over 时写入一个 replay 文件；同一进程内按 `R` 重开会为新局创建新文件。未结束时按 `Q` 或用 `Ctrl+C` 退出不会保存未完成的 replay。
+手动模式会在内存中记录当前局，Game Over 后界面提示 `S = 保存游戏记录`；只有按 `S` 才会把 replay 写入 `replays/` 目录，保存后提示变为 `已保存记录`，并继续停留在结束页面直到按 `R` 或 `Q`。默认文件名形如 `20260527-153012-manual-123456.json`。
+Replay 文件是 JSON，包含随机种子、运行模式、总帧数、`actions` 和 `obstacles`；两组数据都使用 `{"frame": number, "action": ...}` 结构，`actions` 不记录 `none` 帧。重放时按记录数据推进游戏，不再依赖随机生成障碍物。未结束时按 `Q` 或用 `Ctrl+C` 退出不会保存未完成的 replay。
 
 竞技模式会在同一屏幕渲染两条赛道：上方是源 replay 的历史记录，下方是玩家实时操作。两条赛道在源 replay 范围内使用相同的 seed 和障碍物数据；如果玩家超过源 replay 的帧数仍未结束，会继续用源 seed 实时生成障碍物。竞技结束后会写入新的 replay，并额外包含 `competitive: true` 和 `source_replay` 字段用于关联原始记录。
 
