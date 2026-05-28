@@ -36,7 +36,7 @@ dev = [
 ]
 
 [project.scripts]
-dino = "dino_game:cli"
+dino = "dino_game.cli:cli"
 
 [tool.setuptools]
-py-modules = ["dino_game"]
+packages = ["dino_game"]

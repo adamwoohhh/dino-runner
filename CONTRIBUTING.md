@@ -21,7 +21,7 @@ make dev-install
 直接运行源码也仍然可用：
 
 ```bash
-python3 dino_game.py
+python3 -m dino_game.cli
 ```
 
 ## 测试
@@ -63,7 +63,7 @@ python3 -c "import importlib.metadata as m; print([ep.value for ep in m.entry_po
 test -x .venv/bin/dino
 ```
 
-期望 `dino` 入口指向 `dino_game:cli`。
+期望 `dino` 入口指向 `dino_game.cli:cli`。
 
 ## 构建和发布
 
@@ -104,20 +104,15 @@ make build
 
 ## 项目结构
 
-项目主体是单文件游戏：
+项目主体是 `dino_game` 包：
 
 ```text
-dino_game.py
-├── 游戏常量        FPS、重力、速度等参数
-├── 像素艺术        Unicode 字符画精灵
-├── Obstacle       障碍物实体和碰撞箱
-├── DinoGame       游戏引擎、物理、碰撞、生成、状态导出
-├── RuleAgent      基于距离阈值的规则 Agent
-├── LLMAgent       OpenAI Responses API Agent
-├── ReplayRecorder/ReplayPlayer
-├── Renderer       curses 终端渲染器
-├── main()         游戏主循环
-└── cli()          console script 入口
+dino_game/
+├── runtime.py     游戏引擎、渲染、replay、competition 和公共 API
+├── sessions.py    manual、agent、replay、competition 运行控制器
+├── llm_client.py  OpenAI-compatible Responses API transport
+├── cli.py         console script 入口
+└── __init__.py    兼容 import dino_game 的公共导出
 ```
 
 打包入口在 `pyproject.toml`：
@@ -127,7 +122,7 @@ dino_game.py
 name = "ai-dino-in-terminal"
 
 [project.scripts]
-dino = "dino_game:cli"
+dino = "dino_game.cli:cli"
 ```
 
 ## Agent 数据流

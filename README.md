@@ -59,19 +59,19 @@ dino --version
 也可以直接运行源码：
 
 ```bash
-python3 dino_game.py
-python3 dino_game.py play
-python3 dino_game.py agent
-python3 dino_game.py llm
-python3 dino_game.py config
-python3 dino_game.py config +setup
-python3 dino_game.py config +reset
-python3 dino_game.py replay
-python3 dino_game.py replay run.json
-python3 dino_game.py replay +list
-python3 dino_game.py replay +clear
-python3 dino_game.py compete
-python3 dino_game.py compete run.json
+python3 -m dino_game.cli
+python3 -m dino_game.cli play
+python3 -m dino_game.cli agent
+python3 -m dino_game.cli llm
+python3 -m dino_game.cli config
+python3 -m dino_game.cli config +setup
+python3 -m dino_game.cli config +reset
+python3 -m dino_game.cli replay
+python3 -m dino_game.cli replay run.json
+python3 -m dino_game.cli replay +list
+python3 -m dino_game.cli replay +clear
+python3 -m dino_game.cli compete
+python3 -m dino_game.cli compete run.json
 ```
 
 ## 模式

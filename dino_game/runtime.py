@@ -18,16 +18,16 @@ Terminal Dino Runner — Chrome 断网小恐龙的终端版本
   └──────────┘                     └───────────┘
 
 三种运行模式:
-  python dino_game.py                 # 等价于 play，人类手动玩
-  python dino_game.py play            # 人类手动玩
-  python dino_game.py agent           # 规则 AI Agent 自动玩
-  python dino_game.py llm             # OpenAI LLM Agent 玩 (需要本地配置或交互输入)
-  python dino_game.py replay          # 从运行记录列表选择并重放
-  python dino_game.py replay run.json # 重放一局
-  python dino_game.py replay +list    # 浏览记录并查看元信息
-  python dino_game.py replay +clear   # 清除所有记录
-  python dino_game.py compete         # 选择一条运行记录并进入竞技模式
-  python dino_game.py compete run.json # 直接竞技指定记录
+  python -m dino_game.cli                 # 等价于 play，人类手动玩
+  python -m dino_game.cli play            # 人类手动玩
+  python -m dino_game.cli agent           # 规则 AI Agent 自动玩
+  python -m dino_game.cli llm             # OpenAI LLM Agent 玩 (需要本地配置或交互输入)
+  python -m dino_game.cli replay          # 从运行记录列表选择并重放
+  python -m dino_game.cli replay run.json # 重放一局
+  python -m dino_game.cli replay +list    # 浏览记录并查看元信息
+  python -m dino_game.cli replay +clear   # 清除所有记录
+  python -m dino_game.cli compete         # 选择一条运行记录并进入竞技模式
+  python -m dino_game.cli compete run.json # 直接竞技指定记录
 
 游戏内操控:
   SPACE / ↑  跳跃
@@ -49,6 +49,11 @@ import threading
 import math
 from dataclasses import dataclass
 from importlib import metadata
+
+try:
+    from .llm_client import LLMClient
+except ImportError:  # pragma: no cover - supports direct script execution.
+    from llm_client import LLMClient
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1214,6 +1219,76 @@ def format_frame_ranges(frames: list[int]) -> str | None:
     )
 
 
+class ActionWindowPlanner:
+    """Build and parse the JSON action-window protocol used with the LLM.
+
+    Protocol shape:
+      {"start_frame": int, "actions": ["jump" | "duck" | "none", ...]}
+    Each action maps to one frame starting at start_frame, and the schema pins
+    both start_frame and action count for the requested planning window.
+    """
+
+    def build_request(
+            self,
+            state: dict,
+            *,
+            start_frame: int,
+            current_frame: int,
+            window_frames: int) -> tuple[dict, str, dict]:
+        request_state = llm_request_state_for_start_frame(
+            state,
+            current_frame=current_frame,
+            start_frame=start_frame,
+        )
+        planning_guidance = llm_planning_guidance(request_state, current_frame)
+        prompt = f"""你正在玩一个恐龙跑酷游戏。请根据当前状态规划未来 {window_frames} actions。
+
+当前状态:
+- 当前帧: {current_frame}
+- 需要返回的第一帧 start_frame: {start_frame}
+- start_frame 距当前状态还有 {start_frame - current_frame} 帧
+- 恐龙高度: {request_state['dino_y']} (0=地面)
+- 正在跳跃: {request_state['jumping']}
+- 正在蹲下: {request_state['ducking']}
+- 游戏速度: {request_state['speed']}
+- 当前分数: {request_state['score']}
+- 前方障碍物: {json.dumps(request_state['obstacles'], ensure_ascii=False)}
+
+距离 distance 表示障碍物离恐龙的距离，越小越近。
+障碍物每帧向恐龙靠近约 speed 列，因此 distance / speed 可估算还有多少帧相遇。
+height 表示障碍物的高度(鸟)，0=低空，4=中空，8=高空。
+当前恐龙状态由 dino_y、dino_vy、jumping、ducking 表示。
+
+{planning_guidance}
+
+你必须只返回 JSON，不要解释。格式:
+{{"start_frame": {start_frame}, "actions": ["none", "jump"]}}
+
+要求:
+- start_frame 必须等于 {start_frame}
+- actions 必须正好包含 {window_frames} actions
+- 每个 action 只能是 jump / duck / none
+- 每个 action 对应从 start_frame 开始的一帧
+回答:"""
+        return (
+            request_state,
+            prompt,
+            llm_action_window_text_format(start_frame, window_frames),
+        )
+
+    def parse_response(
+            self,
+            response_text: str,
+            *,
+            start_frame: int,
+            window_frames: int) -> dict[int, str]:
+        return parse_llm_action_window(
+            response_text,
+            requested_start_frame=start_frame,
+            expected_action_count=window_frames,
+        )
+
+
 class LLMAgent:
     """调用 OpenAI Responses API 的 LLM Agent，缓存未来逐帧动作。"""
 
@@ -1230,6 +1305,8 @@ class LLMAgent:
         self.requested_frame_ranges: list[tuple[int, int]] = []
         self.lock = threading.Lock()    # 线程安全锁
         self.config = config or load_llm_config()
+        self.client = LLMClient(self.config)
+        self.planner = ActionWindowPlanner()
         self.debug = debug
         self.debug_path = os.fspath(debug_path) if debug_path is not None else None
         if not self.config.is_complete():
@@ -1257,95 +1334,45 @@ class LLMAgent:
         if current_frame is None:
             current_frame = start_frame - 1
         try:
-            import urllib.request
-
-            state = llm_request_state_for_start_frame(
+            request_state, prompt, text_format = self.planner.build_request(
                 state,
                 current_frame=current_frame,
                 start_frame=start_frame,
+                window_frames=window_frames,
             )
-            planning_guidance = llm_planning_guidance(state, current_frame)
-            prompt = f"""你正在玩一个恐龙跑酷游戏。请根据当前状态规划未来 {window_frames} actions。
-
-当前状态:
-- 当前帧: {current_frame}
-- 需要返回的第一帧 start_frame: {start_frame}
-- start_frame 距当前状态还有 {start_frame - current_frame} 帧
-- 恐龙高度: {state['dino_y']} (0=地面)
-- 正在跳跃: {state['jumping']}
-- 正在蹲下: {state['ducking']}
-- 游戏速度: {state['speed']}
-- 当前分数: {state['score']}
-- 前方障碍物: {json.dumps(state['obstacles'], ensure_ascii=False)}
-
-距离 distance 表示障碍物离恐龙的距离，越小越近。
-障碍物每帧向恐龙靠近约 speed 列，因此 distance / speed 可估算还有多少帧相遇。
-height 表示障碍物的高度(鸟)，0=低空，4=中空，8=高空。
-当前恐龙状态由 dino_y、dino_vy、jumping、ducking 表示。
-
-{planning_guidance}
-
-你必须只返回 JSON，不要解释。格式:
-{{"start_frame": {start_frame}, "actions": ["none", "jump"]}}
-
-要求:
-- start_frame 必须等于 {start_frame}
-- actions 必须正好包含 {window_frames} actions
-- 每个 action 只能是 jump / duck / none
-- 每个 action 对应从 start_frame 开始的一帧
-回答:"""
-
-            data = json.dumps({
-                "model": self.config.model,
-                "input": prompt,
-                "text": {
-                    "format": llm_action_window_text_format(start_frame, window_frames),
-                },
-                # "max_output_tokens": max(200, window_frames * 8),
-                "stream": False,
-            }).encode()
-            request_payload = json.loads(data.decode())
+            response = self.client.create_response(
+                prompt=prompt,
+                text_format=text_format,
+                extract_text=extract_response_text,
+            )
             self._debug_log(
                 "llm_request",
                 start_frame=start_frame,
                 current_frame=current_frame,
                 window_frames=window_frames,
-                state=state,
-                payload=request_payload,
+                state=request_state,
+                payload=response.request_payload,
+            )
+            planned = self.planner.parse_response(
+                response.response_text,
+                start_frame=start_frame,
+                window_frames=window_frames,
+            )
+            if not planned:
+                planned = self._fallback_actions(start_frame, window_frames)
+            self._debug_log(
+                "llm_response",
+                start_frame=start_frame,
+                current_frame=current_frame,
+                window_frames=window_frames,
+                raw_response=response.raw_response,
+                response_text=response.response_text,
+                planned_actions=planned,
             )
 
-            req = urllib.request.Request(
-                f"{self.config.base_url.rstrip('/')}/responses",
-                data=data,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.config.api_key}",
-                },
-            )
-
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                result = json.loads(resp.read())
-                response_text = extract_response_text(result)
-                planned = parse_llm_action_window(
-                    response_text,
-                    requested_start_frame=start_frame,
-                    expected_action_count=window_frames,
-                )
-                if not planned:
-                    planned = self._fallback_actions(start_frame, window_frames)
-                self._debug_log(
-                    "llm_response",
-                    start_frame=start_frame,
-                    current_frame=current_frame,
-                    window_frames=window_frames,
-                    raw_response=result,
-                    response_text=response_text,
-                    planned_actions=planned,
-                )
-
-                with self.lock:
-                    self.planned_actions.update(planned)
-                    self.requested_until_frame = max(planned)
+            with self.lock:
+                self.planned_actions.update(planned)
+                self.requested_until_frame = max(planned)
 
         except Exception as exc:
             with self.lock:
@@ -2847,216 +2874,16 @@ def run_competition_loop(stdscr, renderer: Renderer, competition: CompetitionRun
 
 
 def main(stdscr, cli_args: CliArgs | None = None):
-    """游戏主循环
-
-    每帧的执行顺序:
-      1. 读取键盘输入 (curses.getch)
-      2. 处理全局按键 (Q)
-      3. 如果 Game Over → 等待重启
-      4. Agent 决策 或 人类输入
-      5. game.update() 推进一帧
-      6. renderer.draw() 渲染画面
-      7. 等待下一帧 (由 curses.timeout 控制)
-    """
+    """Select the runtime session for the parsed CLI arguments."""
     cli_args = cli_args or parse_cli_args(sys.argv[1:])
-    if cli_args.command == "replay" and cli_args.replay_action == "list":
-        browse_replay_files(stdscr, list_replay_files())
-        return
-
-    competition_mode = cli_args.command == "compete"
-    competition_path = cli_args.competition_path
-    if competition_mode and not competition_path:
-        competition_path = select_replay_file(stdscr, list_replay_files())
-        if not competition_path:
-            return
-
-    replay_path = cli_args.replay_path
-    if cli_args.command == "replay" and not replay_path:
-        replay_path = select_replay_file(stdscr, list_replay_files())
-        if not replay_path:
-            return
-
-    renderer = Renderer(stdscr)
-    record_path = cli_args.record_path
-
-    if competition_mode:
-        replay_player = ReplayPlayer.from_file(competition_path)
-        competition_record_path = (
-            record_path
-            or default_replay_path("competitive", replay_player.seed)
-        )
-        competition = CompetitionRun(
-            replay_player,
-            source_replay=competition_path,
-            record_path=competition_record_path,
-        )
-        run_competition_loop(stdscr, renderer, competition)
-        return
-
-    replay_player = ReplayPlayer.from_file(replay_path) if replay_path else None
-    mode = cli_args.mode
-    run_index = 1
-    if replay_player:
-        game = DinoGame(rng=random.Random(replay_player.seed))
-        recorder = None
-    else:
-        game, recorder = start_recording_run(mode, record_path, run_index)
-
-    manual_input = ManualInputState()
-    pause_state = PauseState()
-    event_frame = 0
-
-    # 根据命令行参数选择 Agent 模式
-    agent = None
-    agent_name = ""
-
-    if replay_player:
-        agent_name = "Replay"
-    elif cli_args.mode == "llm":
-        try:
-            debug_path = (
-                debug_log_path_for_replay(recorder.path)
-                if cli_args.llm_debug and recorder
-                else None
-            )
-            agent = LLMAgent(
-                cli_args.llm_config,
-                debug=cli_args.llm_debug,
-                debug_path=debug_path,
-            )
-            agent_name = "LLM Agent (OpenAI)"
-        except ValueError:
-            # TODO: 没有 API key 时，给出提示 + 终止执行
-            # 没有 API key，降级到规则 Agent
-            agent = RuleAgent()
-            agent_name = "Rule Agent (LLM config unavailable)"
-    elif cli_args.mode == "agent":
-        agent = RuleAgent()
-        agent_name = "Rule Agent"
-
     try:
-        while True:
-            key = stdscr.getch()    # 非阻塞，超时返回 -1
+        from .sessions import session_for_cli_args
+    except ImportError:  # pragma: no cover - supports direct script execution.
+        from sessions import session_for_cli_args
 
-            # ── 全局按键 ──
-            if key == ord('q') or key == ord('Q'):
-                break
-            now = time.monotonic()
-            pause_state = next_pause_state(pause_state, key, now)
-
-            # ── Game Over 状态 ──
-            if game.game_over:
-                if replay_player:
-                    event_frame += 1
-                    if not replay_player.has_frame(event_frame):
-                        renderer.draw(game, agent_name)
-                        continue
-                    action = replay_player.action_for_frame(event_frame)
-                    if action == "reset":
-                        game.reset()
-                    renderer.draw(
-                        game,
-                        agent_name,
-                        cached_frames_view=cached_frames_view_for_agent(agent, event_frame + 1),
-                    )
-                    continue
-
-                if should_reset_after_game_over(key, agent_active=bool(agent)):
-                    run_index += 1
-                    game, recorder = start_recording_run(mode, record_path, run_index)
-                    manual_input = ManualInputState()
-                    pause_state = PauseState()
-                    event_frame = 0
-                    if isinstance(agent, LLMAgent):
-                        agent.reset_plan()
-                        if cli_args.llm_debug and recorder:
-                            agent.set_debug_path(debug_log_path_for_replay(recorder.path))
-                renderer.draw(
-                    game,
-                    agent_name,
-                    cached_frames_view=cached_frames_view_for_agent(agent, event_frame + 1),
-                )
-                continue
-
-            if pause_state.status != "running":
-                renderer.draw(
-                    game,
-                    agent_name,
-                    pause_state,
-                    now,
-                    cached_frames_view=cached_frames_view_for_agent(agent, event_frame + 1),
-                )
-                continue
-
-            # ── 输入处理 ──
-            next_frame = event_frame + 1
-            if replay_player:
-                event_frame = next_frame
-                if not replay_player.has_frame(event_frame):
-                    renderer.draw(game, agent_name)
-                    continue
-                action = replay_player.action_for_frame(event_frame)
-                apply_game_action(game, action)
-            elif isinstance(agent, LLMAgent):
-                state = game.get_llm_state()
-                agent.ensure_plan(state, next_frame)
-                if agent.needs_loading(next_frame):
-                    renderer.draw(
-                        game,
-                        agent_name,
-                        loading_text=LLM_LOADING_TEXT,
-                        cached_frames_view=cached_frames_view_for_agent(agent, next_frame),
-                    )
-                    continue
-                event_frame = next_frame
-                action = agent.decide(state, frame=event_frame)
-                apply_game_action(game, action)
-            elif agent:
-                event_frame = next_frame
-                # Agent 模式: 读取状态 → 决策 → 执行动作
-                state = game.get_state()
-                action = agent.decide(state)
-                apply_game_action(game, action)
-            else:
-                event_frame = next_frame
-                # 人类模式: 直接响应键盘
-                action = "none"
-                if key == ord(' ') or key == curses.KEY_UP:
-                    action = "jump"
-                    game.jump()
-                ducking = manual_input.should_duck(key)
-                game.duck(ducking)
-                if action != "jump":
-                    action = "duck" if ducking else "none"
-
-            if recorder:
-                recorder.record_action(event_frame, action)
-
-            # ── 更新 & 渲染 ──
-            if replay_player:
-                spawned_obstacles = game.update(
-                    replay_obstacles=replay_player.obstacles_for_frame(event_frame),
-                )
-            else:
-                spawned_obstacles = game.update()
-                if recorder:
-                    for obstacle in spawned_obstacles:
-                        recorder.record_obstacle(event_frame, obstacle)
-                    if game.game_over:
-                        debug_log_llm_game_over(
-                            agent,
-                            game,
-                            frame=event_frame,
-                            action=action,
-                        )
-                        finish_recording(recorder)
-            renderer.draw(
-                game,
-                agent_name,
-                cached_frames_view=cached_frames_view_for_agent(agent, event_frame + 1),
-            )
-    except KeyboardInterrupt:
-        return
+    session = session_for_cli_args(stdscr, cli_args)
+    if session:
+        session.run()
 
 
 # ═══════════════════════════════════════════════════════════════════════

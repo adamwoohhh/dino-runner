@@ -16,10 +16,10 @@ dev-install: venv
 	$(PIP) install -e ".[dev]"
 
 test: venv
-	env PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m unittest tests/test_packaging.py
+	env PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m unittest discover -s tests
 
 check: test
-	env PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m py_compile dino_game.py
+	env PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m compileall dino_game
 
 build:
 	rm -rf dist
