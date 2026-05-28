@@ -67,7 +67,7 @@ class CliContractTest(unittest.TestCase):
         self.assertIn("+setup", config_help)
         self.assertIn("+reset", config_help)
         self.assertIn("Usage: dino setup", setup_help)
-        self.assertIn("llm_window_frames", setup_help)
+        self.assertIn("llm_mode", setup_help)
         self.assertNotRegex(
             play_help + replay_help + compete_help + config_help + setup_help,
             r"[\u4e00-\u9fff]",
@@ -118,3 +118,28 @@ class CliContractTest(unittest.TestCase):
 
         self.assertEqual(dino_game.parse_cli_args(["--version"]).version, "0.1.0")
         self.assertEqual(dino_game.parse_cli_args(["play", "-V"]).version, "0.1.0")
+
+    def test_setup_keyboard_interrupt_exits_without_traceback(self):
+        dino_game = self.dino_game()
+        messages = []
+
+        with mock.patch("sys.argv", ["dino", "setup"]), \
+                mock.patch("builtins.print", messages.append), \
+                mock.patch("dino_game.cli.run_config_setup", side_effect=KeyboardInterrupt):
+            dino_game.cli()
+
+        self.assertEqual(messages, ["Setup cancelled."])
+
+    def test_llm_config_keyboard_interrupt_exits_without_traceback(self):
+        dino_game = self.dino_game()
+        messages = []
+
+        with mock.patch("sys.argv", ["dino", "play", "--llm"]), \
+                mock.patch("builtins.print", messages.append), \
+                mock.patch(
+                    "dino_game.cli.resolve_llm_config_for_run",
+                    side_effect=KeyboardInterrupt,
+                ):
+            dino_game.cli()
+
+        self.assertEqual(messages, ["Setup cancelled."])

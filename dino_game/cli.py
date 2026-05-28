@@ -132,7 +132,7 @@ def render_command_help(command: str) -> str:
     elif command == "setup":
         usage = "dino setup"
         options = [
-            "  Prompts for api_key, base_url, model, and llm_window_frames",
+            "  Prompts for llm_mode and related LLM settings",
             "  Writes the answers to config.json",
         ]
     elif command == "help":
@@ -272,7 +272,10 @@ def cli():
         return
     if cli_args.command in {"config", "setup"}:
         if cli_args.config_action == "setup":
-            run_config_setup()
+            try:
+                run_config_setup()
+            except KeyboardInterrupt:
+                print("Setup cancelled.")
             return
         if cli_args.config_action == "reset":
             removed = reset_llm_config()
@@ -288,6 +291,11 @@ def cli():
         print(f"已清除 {removed} 个 replay 记录文件")
         return
     if cli_args.mode == "llm":
+        try:
+            llm_config = resolve_llm_config_for_run()
+        except KeyboardInterrupt:
+            print("Setup cancelled.")
+            return
         cli_args = CliArgs(
             command=cli_args.command,
             mode=cli_args.mode,
@@ -295,7 +303,7 @@ def cli():
             replay_action=cli_args.replay_action,
             competition_path=cli_args.competition_path,
             config_action=cli_args.config_action,
-            llm_config=resolve_llm_config_for_run(),
+            llm_config=llm_config,
             llm_debug=cli_args.llm_debug,
             show_help=cli_args.show_help,
             help_text=cli_args.help_text,

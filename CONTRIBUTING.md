@@ -177,13 +177,16 @@ LLM 配置文件固定为 `~/.config/ai-dino-in-terminal/config.json`：
 
 ```json
 {
+  "llm_mode": "API",
   "api_key": "sk-...",
   "base_url": "https://api.openai.com/v1",
-  "model": "gpt-5-mini"
+  "model": "gpt-5-mini",
+  "llm_window_frames": 180
 }
 ```
 
 可以用 `dino config` 查看配置，`dino config +setup` 交互式写入配置，`dino config +reset` 重置配置。
+`llm_mode` 支持 `API` 和 `CODEX`。`API` 模式要求 `api_key`、`base_url` 和 `model`；`CODEX` 模式会跳过这些 API 参数。
 `dino play --llm` 启动时如果配置缺失，会在进入 curses 前提示输入；输入后默认不保存，仅本次使用，用户回答 `y` 才会写入本地配置。
 
 因此 LLM 模式用于演示“模型读取结构化状态并决策”，不是实时游戏的最佳策略。接口慢返回或失败时，游戏仍继续推进；失败动作会降级为 `none`。

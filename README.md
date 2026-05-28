@@ -91,12 +91,14 @@ python3 -m dino_game.cli compete run.json
 | `dino compete` | 从历史运行记录列表选择一局并进入双赛道竞技 | `replays/*.json` |
 | `dino compete run.json` | 直接使用指定 replay 进入竞技模式 | 对应 replay 文件 |
 | `dino config` | 查看本地 LLM 配置（API key 脱敏显示） | 无 |
-| `dino config +setup` | 交互式写入本地 LLM 配置 | OpenAI-compatible API key |
+| `dino config +setup` | 交互式写入本地 LLM 配置 | 选择 API 或 CODEX 模式 |
 | `dino config +reset` | 重置本地 LLM 配置 | 无 |
 | `dino help` | 查看可用命令和公共参数 | 无 |
 
 LLM 配置文件固定保存在 `~/.config/ai-dino-in-terminal/config.json`。
-如果 `dino play --llm` 缺少必要配置，启动游戏前会提示输入 `api_key`、`base_url` 和 `model`；
+配置包含 `llm_mode`，可选 `API` 或 `CODEX`。当 `llm_mode` 为 `API` 时，`api_key`、`base_url` 和 `model` 为必填；
+当 `llm_mode` 为 `CODEX` 时，会跳过这些 API 参数。
+如果 `dino play --llm` 缺少必要配置，启动游戏前会提示补全；
 输入完成后会询问是否持久化到本地配置，默认 `N`，仅本次运行使用。
 
 手动模式会在内存中记录当前局，Game Over 后界面提示 `S = 保存游戏记录`；只有按 `S` 才会把 replay 写入 `replays/` 目录，保存后提示变为 `已保存记录`，并继续停留在结束页面直到按 `R` 或 `Q`。默认文件名形如 `20260527-153012-manual-123456.json`。

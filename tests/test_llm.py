@@ -35,10 +35,12 @@ class LLMConfigTest(unittest.TestCase):
 
             self.assertEqual(dino_game.load_llm_config(config_path), config)
             stored = json.loads(config_path.read_text())
+            self.assertEqual(stored["llm_mode"], "API")
             self.assertEqual(stored["api_key"], "sk-abcdefghijklmnopqrstuvwxyz")
             self.assertEqual(stored["llm_window_frames"], 720)
 
             rendered = dino_game.render_llm_config(config)
+            self.assertIn("llm_mode: API", rendered)
             self.assertIn("api_key: sk-a...wxyz", rendered)
             self.assertNotIn("abcdefghijklmnopqrstuvwxyz", rendered)
             self.assertIn("base_url: https://example.test/v1", rendered)
@@ -49,9 +51,37 @@ class LLMConfigTest(unittest.TestCase):
             self.assertFalse(config_path.exists())
             self.assertFalse(dino_game.reset_llm_config(config_path))
 
+    def test_missing_config_does_not_render_api_endpoint_defaults(self):
+        dino_game = self.dino_game()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = pathlib.Path(temp_dir) / "missing.json"
+
+            config = dino_game.load_llm_config(config_path)
+            rendered = dino_game.render_llm_config(config, config_path)
+
+            self.assertEqual(config.llm_mode, "API")
+            self.assertFalse(config.is_complete())
+            self.assertIn("base_url: (not set)", rendered)
+            self.assertIn("model: (not set)", rendered)
+
+    def test_api_config_missing_endpoint_fields_is_incomplete(self):
+        dino_game = self.dino_game()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = pathlib.Path(temp_dir) / "config.json"
+            config_path.write_text(json.dumps({
+                "llm_mode": "API",
+                "api_key": "sk-test",
+            }))
+
+            config = dino_game.load_llm_config(config_path)
+
+            self.assertEqual(config.base_url, "")
+            self.assertEqual(config.model, "")
+            self.assertFalse(config.is_complete())
+
     def test_prompt_for_llm_config_defaults_and_optional_persistence(self):
         dino_game = self.dino_game()
-        answers = iter(["sk-test", "", "", "", ""])
+        answers = iter(["", "sk-test", "", "", "", ""])
         messages = []
 
         config, persist = dino_game.prompt_for_llm_config(
@@ -61,6 +91,7 @@ class LLMConfigTest(unittest.TestCase):
         )
 
         self.assertEqual(config.api_key, "sk-test")
+        self.assertEqual(config.llm_mode, "API")
         self.assertEqual(config.base_url, dino_game.DEFAULT_OPENAI_BASE_URL)
         self.assertEqual(config.model, dino_game.DEFAULT_OPENAI_MODEL)
         self.assertEqual(config.llm_window_frames, dino_game.DEFAULT_LLM_ACTION_WINDOW_FRAMES)
@@ -68,7 +99,7 @@ class LLMConfigTest(unittest.TestCase):
 
     def test_setup_flow_writes_without_asking_for_persistence(self):
         dino_game = self.dino_game()
-        answers = iter(["sk-test", "", "https://example.test/v1", "", "gpt-test", "720"])
+        answers = iter(["", "sk-test", "", "https://example.test/v1", "", "gpt-test", "720"])
         messages = []
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = pathlib.Path(temp_dir) / "config.json"
@@ -80,6 +111,7 @@ class LLMConfigTest(unittest.TestCase):
             )
 
             self.assertEqual(config.model, "gpt-test")
+            self.assertEqual(config.llm_mode, "API")
             self.assertEqual(config.base_url, "https://example.test/v1")
             self.assertEqual(config.llm_window_frames, 720)
             self.assertEqual(dino_game.load_llm_config(config_path), config)
@@ -87,9 +119,76 @@ class LLMConfigTest(unittest.TestCase):
             self.assertTrue(any("Model is required." in message for message in messages))
             self.assertTrue(any("Saved config" in message for message in messages))
 
+    def test_setup_flow_can_select_codex_mode_without_api_values(self):
+        dino_game = self.dino_game()
+        answers = iter(["2", "360"])
+        messages = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = pathlib.Path(temp_dir) / "config.json"
+
+            config = dino_game.run_config_setup(
+                config_path=config_path,
+                input_func=lambda prompt: next(answers),
+                output_func=messages.append,
+            )
+
+            self.assertEqual(config.llm_mode, "CODEX")
+            self.assertEqual(config.api_key, "")
+            self.assertEqual(config.base_url, "")
+            self.assertEqual(config.model, "")
+            self.assertEqual(config.llm_window_frames, 360)
+            self.assertTrue(config.is_complete())
+            self.assertEqual(dino_game.load_llm_config(config_path), config)
+            stored = json.loads(config_path.read_text())
+            self.assertEqual(stored["llm_mode"], "CODEX")
+            self.assertEqual(stored["api_key"], "")
+            self.assertEqual(stored["base_url"], "")
+            self.assertEqual(stored["model"], "")
+
+    def test_load_llm_config_defaults_missing_mode_to_api(self):
+        dino_game = self.dino_game()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = pathlib.Path(temp_dir) / "config.json"
+            config_path.write_text(json.dumps({
+                "api_key": "sk-legacy",
+                "base_url": "https://example.test/v1",
+                "model": "gpt-test",
+            }))
+
+            config = dino_game.load_llm_config(config_path)
+
+            self.assertEqual(config.llm_mode, "API")
+            self.assertTrue(config.is_complete())
+
+    def test_api_mode_requires_endpoint_values_but_codex_mode_does_not(self):
+        dino_game = self.dino_game()
+
+        self.assertFalse(dino_game.LLMConfig(llm_mode="API").is_complete())
+        self.assertTrue(dino_game.LLMConfig(llm_mode="CODEX").is_complete())
+
+    def test_codex_mode_does_not_render_or_save_api_defaults(self):
+        dino_game = self.dino_game()
+        config = dino_game.LLMConfig(llm_mode="CODEX")
+
+        rendered = dino_game.render_llm_config(config)
+
+        self.assertIn("llm_mode: CODEX", rendered)
+        self.assertIn("api_key: (not set)", rendered)
+        self.assertIn("base_url: (not set)", rendered)
+        self.assertIn("model: (not set)", rendered)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = pathlib.Path(temp_dir) / "config.json"
+            dino_game.save_llm_config(config, config_path)
+
+            stored = json.loads(config_path.read_text())
+
+        self.assertEqual(stored["api_key"], "")
+        self.assertEqual(stored["base_url"], "")
+        self.assertEqual(stored["model"], "")
+
     def test_prompt_for_llm_config_reprompts_invalid_window_frames(self):
         dino_game = self.dino_game()
-        answers = iter(["sk-test", "", "", "abc", "0", "180"])
+        answers = iter(["", "sk-test", "", "", "abc", "0", "180"])
         messages = []
 
         config, _ = dino_game.prompt_for_llm_config(
@@ -104,7 +203,7 @@ class LLMConfigTest(unittest.TestCase):
         dino_game = self.dino_game()
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = pathlib.Path(temp_dir) / "config.json"
-            answers = iter(["sk-session", "", "https://example.test/v1", "", "gpt-test", "720"])
+            answers = iter(["", "sk-session", "", "https://example.test/v1", "", "gpt-test", "720"])
             messages = []
 
             config = dino_game.resolve_llm_config_for_run(
