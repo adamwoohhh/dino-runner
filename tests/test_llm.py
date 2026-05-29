@@ -36,14 +36,22 @@ class LLMConfigTest(unittest.TestCase):
 
             dino_game.save_llm_config(config, config_path)
 
-            self.assertEqual(dino_game.load_llm_config(config_path), config)
+            self.assertEqual(
+                dino_game.load_llm_config(config_path),
+                dino_game.LLMConfig(
+                    api_key="sk-abcdefghijklmnopqrstuvwxyz",
+                    base_url="https://example.test/v1",
+                    model="gpt-test",
+                    llm_window_frames=720,
+                ),
+            )
             stored = json.loads(config_path.read_text())
-            self.assertEqual(stored["llm_mode"], "API")
+            self.assertNotIn("llm_mode", stored)
             self.assertEqual(stored["api_key"], "sk-abcdefghijklmnopqrstuvwxyz")
             self.assertEqual(stored["llm_window_frames"], 720)
 
             rendered = dino_game.render_llm_config(config)
-            self.assertIn("llm_mode: API", rendered)
+            self.assertNotIn("llm_mode:", rendered)
             self.assertIn("api_key: sk-a...wxyz", rendered)
             self.assertNotIn("abcdefghijklmnopqrstuvwxyz", rendered)
             self.assertIn("base_url: https://example.test/v1", rendered)
@@ -84,7 +92,7 @@ class LLMConfigTest(unittest.TestCase):
 
     def test_prompt_for_llm_config_defaults_and_optional_persistence(self):
         dino_game = self.dino_game()
-        answers = iter(["", "sk-test", "", "", "", ""])
+        answers = iter(["sk-test", "", "", "", ""])
         messages = []
 
         config, persist = dino_game.prompt_for_llm_config(
@@ -102,7 +110,7 @@ class LLMConfigTest(unittest.TestCase):
 
     def test_setup_flow_writes_without_asking_for_persistence(self):
         dino_game = self.dino_game()
-        answers = iter(["", "sk-test", "", "https://example.test/v1", "", "gpt-test", "720"])
+        answers = iter(["sk-test", "", "https://example.test/v1", "", "gpt-test", "720"])
         messages = []
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = pathlib.Path(temp_dir) / "config.json"
@@ -122,51 +130,31 @@ class LLMConfigTest(unittest.TestCase):
             self.assertTrue(any("Model is required." in message for message in messages))
             self.assertTrue(any("Saved config" in message for message in messages))
 
-    def test_setup_flow_can_select_codex_mode_without_api_values(self):
+    def test_setup_flow_writes_api_values_only_without_llm_mode(self):
         dino_game = self.dino_game()
-        answers = iter(["2", "360"])
+        answers = iter(["sk-test", "https://example.test/v1", "gpt-test", "360"])
         messages = []
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = pathlib.Path(temp_dir) / "config.json"
 
-            with mock.patch("shutil.which", return_value="/usr/bin/codex"), \
-                    mock.patch("subprocess.run", return_value=self.codex_version_result()):
-                config = dino_game.run_config_setup(
-                    config_path=config_path,
-                    input_func=lambda prompt: next(answers),
-                    output_func=messages.append,
-                )
+            config = dino_game.run_config_setup(
+                config_path=config_path,
+                input_func=lambda prompt: next(answers),
+                output_func=messages.append,
+            )
 
-            self.assertEqual(config.llm_mode, "CODEX")
-            self.assertEqual(config.api_key, "")
-            self.assertEqual(config.base_url, "")
-            self.assertEqual(config.model, "")
+            self.assertEqual(config.llm_mode, "API")
+            self.assertEqual(config.api_key, "sk-test")
+            self.assertEqual(config.base_url, "https://example.test/v1")
+            self.assertEqual(config.model, "gpt-test")
             self.assertEqual(config.llm_window_frames, 360)
             self.assertTrue(config.is_complete())
             self.assertEqual(dino_game.load_llm_config(config_path), config)
             stored = json.loads(config_path.read_text())
-            self.assertEqual(stored["llm_mode"], "CODEX")
-            self.assertEqual(stored["api_key"], "")
-            self.assertEqual(stored["base_url"], "")
-            self.assertEqual(stored["model"], "")
-
-    def test_setup_flow_rejects_codex_mode_without_codex_cli(self):
-        dino_game = self.dino_game()
-        answers = iter(["2"])
-        messages = []
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config_path = pathlib.Path(temp_dir) / "config.json"
-
-            with mock.patch("shutil.which", return_value=None), \
-                    self.assertRaises(dino_game.LLMConfigError) as error:
-                dino_game.run_config_setup(
-                    config_path=config_path,
-                    input_func=lambda prompt: next(answers),
-                    output_func=messages.append,
-                )
-
-            self.assertIn("Codex CLI is not installed", str(error.exception))
-            self.assertFalse(config_path.exists())
+            self.assertNotIn("llm_mode", stored)
+            self.assertEqual(stored["api_key"], "sk-test")
+            self.assertEqual(stored["base_url"], "https://example.test/v1")
+            self.assertEqual(stored["model"], "gpt-test")
 
     def test_codex_cli_version_text_parses_current_machine_version(self):
         dino_game = self.dino_game()
@@ -206,24 +194,22 @@ class LLMConfigTest(unittest.TestCase):
 
         self.assertIn("Unable to determine Codex CLI version", str(error.exception))
 
-    def test_resolve_llm_config_rejects_saved_codex_mode_without_codex_cli(self):
+    def test_load_llm_config_ignores_saved_llm_mode(self):
         dino_game = self.dino_game()
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = pathlib.Path(temp_dir) / "config.json"
             config_path.write_text(json.dumps({
                 "llm_mode": "CODEX",
+                "api_key": "sk-test",
+                "base_url": "https://example.test/v1",
+                "model": "gpt-test",
                 "llm_window_frames": 180,
             }))
 
-            with mock.patch("shutil.which", return_value=None), \
-                    self.assertRaises(dino_game.LLMConfigError) as error:
-                dino_game.resolve_llm_config_for_run(
-                    config_path=config_path,
-                    input_func=lambda prompt: "",
-                    output_func=lambda message: None,
-                )
+            config = dino_game.load_llm_config(config_path)
 
-            self.assertIn("Codex CLI is not installed", str(error.exception))
+            self.assertEqual(config.llm_mode, "API")
+            self.assertTrue(config.is_complete())
 
     def test_load_llm_config_defaults_missing_mode_to_api(self):
         dino_game = self.dino_game()
@@ -246,29 +232,25 @@ class LLMConfigTest(unittest.TestCase):
         self.assertFalse(dino_game.LLMConfig(llm_mode="API").is_complete())
         self.assertTrue(dino_game.LLMConfig(llm_mode="CODEX").is_complete())
 
-    def test_codex_mode_does_not_render_or_save_api_defaults(self):
+    def test_codex_mode_does_not_render_api_values_when_applied_at_runtime(self):
         dino_game = self.dino_game()
-        config = dino_game.LLMConfig(llm_mode="CODEX")
+        config = dino_game.config_with_llm_mode(
+            dino_game.LLMConfig(
+                api_key="sk-test",
+                base_url="https://example.test/v1",
+                model="gpt-test",
+            ),
+            "CODEX",
+        )
 
-        rendered = dino_game.render_llm_config(config)
-
-        self.assertIn("llm_mode: CODEX", rendered)
-        self.assertIn("api_key: (not set)", rendered)
-        self.assertIn("base_url: (not set)", rendered)
-        self.assertIn("model: (not set)", rendered)
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config_path = pathlib.Path(temp_dir) / "config.json"
-            dino_game.save_llm_config(config, config_path)
-
-            stored = json.loads(config_path.read_text())
-
-        self.assertEqual(stored["api_key"], "")
-        self.assertEqual(stored["base_url"], "")
-        self.assertEqual(stored["model"], "")
+        self.assertEqual(config.llm_mode, "CODEX")
+        self.assertEqual(config.api_key, "")
+        self.assertEqual(config.base_url, "")
+        self.assertEqual(config.model, "")
 
     def test_prompt_for_llm_config_reprompts_invalid_window_frames(self):
         dino_game = self.dino_game()
-        answers = iter(["", "sk-test", "", "", "abc", "0", "180"])
+        answers = iter(["sk-test", "", "", "abc", "0", "180"])
         messages = []
 
         config, _ = dino_game.prompt_for_llm_config(
@@ -283,14 +265,15 @@ class LLMConfigTest(unittest.TestCase):
         dino_game = self.dino_game()
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = pathlib.Path(temp_dir) / "config.json"
-            answers = iter(["", "sk-session", "", "https://example.test/v1", "", "gpt-test", "720"])
+            answers = iter(["sk-session", "", "https://example.test/v1", "", "gpt-test", "720"])
             messages = []
 
-            config = dino_game.resolve_llm_config_for_run(
-                config_path=config_path,
-                input_func=lambda prompt: next(answers),
-                output_func=messages.append,
-            )
+            with mock.patch("shutil.which", return_value=None):
+                config = dino_game.resolve_llm_config_for_run(
+                    config_path=config_path,
+                    input_func=lambda prompt: next(answers),
+                    output_func=messages.append,
+                )
 
             self.assertEqual(config.api_key, "sk-session")
             self.assertEqual(config.base_url, "https://example.test/v1")
@@ -300,6 +283,99 @@ class LLMConfigTest(unittest.TestCase):
             self.assertTrue(any("Base URL is required." in message for message in messages))
             self.assertTrue(any("Model is required." in message for message in messages))
             self.assertTrue(any("Saved config" in message for message in messages))
+
+    def test_resolve_llm_config_explicit_codex_ignores_api_config_and_validates_codex(self):
+        dino_game = self.dino_game()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = pathlib.Path(temp_dir) / "missing.json"
+
+            with mock.patch("shutil.which", return_value="/usr/bin/codex"), \
+                    mock.patch("subprocess.run", return_value=self.codex_version_result()):
+                config = dino_game.resolve_llm_config_for_run(
+                    config_path=config_path,
+                    llm_mode="CODEX",
+                    input_func=lambda prompt: "",
+                    output_func=lambda message: None,
+                )
+
+            self.assertEqual(config.llm_mode, "CODEX")
+            self.assertEqual(config.api_key, "")
+            self.assertEqual(config.base_url, "")
+            self.assertEqual(config.model, "")
+
+    def test_resolve_llm_config_explicit_api_prompts_when_api_config_missing(self):
+        dino_game = self.dino_game()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = pathlib.Path(temp_dir) / "config.json"
+            config_path.write_text(json.dumps({"llm_mode": "CODEX"}))
+            answers = iter(["sk-session", "https://example.test/v1", "gpt-test", "600", "y"])
+            messages = []
+
+            config = dino_game.resolve_llm_config_for_run(
+                config_path=config_path,
+                llm_mode="API",
+                input_func=lambda prompt: next(answers),
+                output_func=messages.append,
+            )
+
+            self.assertEqual(config.llm_mode, "API")
+            self.assertEqual(config.api_key, "sk-session")
+            self.assertTrue(any("Saved config" in message for message in messages))
+
+    def test_resolve_llm_config_auto_uses_codex_when_available_and_api_missing(self):
+        dino_game = self.dino_game()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = pathlib.Path(temp_dir) / "missing.json"
+
+            with mock.patch("shutil.which", return_value="/usr/bin/codex"), \
+                    mock.patch("subprocess.run", return_value=self.codex_version_result()):
+                config = dino_game.resolve_llm_config_for_run(
+                    config_path=config_path,
+                    input_func=lambda prompt: "",
+                    output_func=lambda message: None,
+                )
+
+            self.assertEqual(config.llm_mode, "CODEX")
+
+    def test_resolve_llm_config_auto_uses_api_when_codex_missing_and_api_configured(self):
+        dino_game = self.dino_game()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = pathlib.Path(temp_dir) / "config.json"
+            config_path.write_text(json.dumps({
+                "api_key": "sk-test",
+                "base_url": "https://example.test/v1",
+                "model": "gpt-test",
+            }))
+
+            with mock.patch("shutil.which", return_value=None):
+                config = dino_game.resolve_llm_config_for_run(
+                    config_path=config_path,
+                    input_func=lambda prompt: "",
+                    output_func=lambda message: None,
+                )
+
+            self.assertEqual(config.llm_mode, "API")
+
+    def test_resolve_llm_config_auto_asks_when_codex_and_api_are_both_available(self):
+        dino_game = self.dino_game()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = pathlib.Path(temp_dir) / "config.json"
+            config_path.write_text(json.dumps({
+                "api_key": "sk-test",
+                "base_url": "https://example.test/v1",
+                "model": "gpt-test",
+            }))
+            answers = iter(["2"])
+
+            with mock.patch("shutil.which", return_value="/usr/bin/codex"), \
+                    mock.patch("subprocess.run", return_value=self.codex_version_result()):
+                config = dino_game.resolve_llm_config_for_run(
+                    config_path=config_path,
+                    input_func=lambda prompt: next(answers),
+                    output_func=lambda message: None,
+                )
+
+            self.assertEqual(config.llm_mode, "CODEX")
 
 
 class LLMAgentOpenAITest(unittest.TestCase):

@@ -52,7 +52,7 @@ class CliContractTest(unittest.TestCase):
         config_help = dino_game.render_command_help("config")
         setup_help = dino_game.render_command_help("setup")
 
-        self.assertIn("Usage: dino play [--auto|--llm] [--debug]", play_help)
+        self.assertIn("Usage: dino play [--auto|--llm [api|codex]] [--debug]", play_help)
         self.assertIn("--auto", play_help)
         self.assertIn("--llm", play_help)
         self.assertIn("--debug", play_help)
@@ -67,7 +67,7 @@ class CliContractTest(unittest.TestCase):
         self.assertIn("+setup", config_help)
         self.assertIn("+reset", config_help)
         self.assertIn("Usage: dino setup", setup_help)
-        self.assertIn("llm_mode", setup_help)
+        self.assertIn("API LLM settings", setup_help)
         self.assertNotRegex(
             play_help + replay_help + compete_help + config_help + setup_help,
             r"[\u4e00-\u9fff]",
@@ -80,7 +80,12 @@ class CliContractTest(unittest.TestCase):
         self.assertEqual(dino_game.parse_cli_args(["play"]).mode, "manual")
         self.assertEqual(dino_game.parse_cli_args(["play", "--auto"]).mode, "agent")
         self.assertEqual(dino_game.parse_cli_args(["play", "--llm"]).mode, "llm")
+        self.assertIsNone(dino_game.parse_cli_args(["play", "--llm"]).llm_mode)
+        self.assertEqual(dino_game.parse_cli_args(["play", "--llm", "api"]).llm_mode, "API")
+        self.assertEqual(dino_game.parse_cli_args(["play", "--llm", "codex"]).llm_mode, "CODEX")
+        self.assertTrue(dino_game.parse_cli_args(["play", "--llm", "bad"]).show_help)
         self.assertTrue(dino_game.parse_cli_args(["play", "--llm", "--debug"]).llm_debug)
+        self.assertTrue(dino_game.parse_cli_args(["play", "--llm", "codex", "--debug"]).llm_debug)
         self.assertFalse(dino_game.parse_cli_args(["play", "--debug"]).llm_debug)
         self.assertTrue(dino_game.parse_cli_args(["play", "--debug"]).show_help)
         self.assertTrue(dino_game.parse_cli_args(["play", "--auto", "--debug"]).show_help)
@@ -143,6 +148,18 @@ class CliContractTest(unittest.TestCase):
             dino_game.cli()
 
         self.assertEqual(messages, ["Setup cancelled."])
+
+    def test_llm_mode_argument_is_passed_to_config_resolution(self):
+        dino_game = self.dino_game()
+        config = dino_game.LLMConfig(llm_mode="CODEX")
+
+        with mock.patch("sys.argv", ["dino", "play", "--llm", "codex"]), \
+                mock.patch("dino_game.cli.resolve_llm_config_for_run", return_value=config) as resolve, \
+                mock.patch("dino_game.cli.curses.wrapper") as wrapper:
+            dino_game.cli()
+
+        resolve.assert_called_once_with(llm_mode="CODEX")
+        self.assertEqual(wrapper.call_args.args[1].llm_config, config)
 
     def test_config_error_exits_without_traceback(self):
         dino_game = self.dino_game()

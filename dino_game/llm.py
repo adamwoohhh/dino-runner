@@ -126,7 +126,6 @@ def load_llm_config(path: str | os.PathLike | None = None) -> LLMConfig:
         return LLMConfig(base_url="", model="")
     if not isinstance(data, dict):
         return LLMConfig(base_url="", model="")
-    llm_mode = normalize_llm_mode(data.get("llm_mode"))
     return LLMConfig(
         api_key=str(data.get("api_key") or ""),
         base_url=str(data.get("base_url") or ""),
@@ -135,22 +134,17 @@ def load_llm_config(path: str | os.PathLike | None = None) -> LLMConfig:
             data.get("llm_window_frames"),
             DEFAULT_LLM_ACTION_WINDOW_FRAMES,
         ),
-        llm_mode=llm_mode,
+        llm_mode="API",
     )
 
 def save_llm_config(config: LLMConfig, path: str | os.PathLike | None = None):
     """Persist LLM config as JSON."""
     config_path = os.fspath(path or config_file_path())
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
-    llm_mode = normalize_llm_mode(config.llm_mode)
-    api_key = config.api_key if llm_mode == "API" else ""
-    base_url = config.base_url if llm_mode == "API" else ""
-    model = config.model if llm_mode == "API" else ""
     data = {
-        "llm_mode": llm_mode,
-        "api_key": api_key,
-        "base_url": base_url,
-        "model": model,
+        "api_key": config.api_key,
+        "base_url": config.base_url,
+        "model": config.model,
         "llm_window_frames": _positive_int(
             config.llm_window_frames,
             DEFAULT_LLM_ACTION_WINDOW_FRAMES,
@@ -180,20 +174,15 @@ def mask_api_key(api_key: str) -> str:
 def render_llm_config(config: LLMConfig, path: str | os.PathLike | None = None) -> str:
     """Render config for CLI display without leaking the full API key."""
     config_path = os.fspath(path or config_file_path())
-    llm_mode = normalize_llm_mode(config.llm_mode)
-    api_key = config.api_key if llm_mode == "API" else ""
-    base_url = config.base_url if llm_mode == "API" else ""
-    model = config.model if llm_mode == "API" else ""
     llm_window_frames = _positive_int(
         config.llm_window_frames,
         DEFAULT_LLM_ACTION_WINDOW_FRAMES,
     )
     return "\n".join([
         f"path: {config_path}",
-        f"llm_mode: {llm_mode}",
-        f"api_key: {mask_api_key(api_key)}",
-        f"base_url: {base_url or '(not set)'}",
-        f"model: {model or '(not set)'}",
+        f"api_key: {mask_api_key(config.api_key)}",
+        f"base_url: {config.base_url or '(not set)'}",
+        f"model: {config.model or '(not set)'}",
         f"llm_window_frames: {llm_window_frames}",
     ])
 
@@ -226,24 +215,6 @@ def prompt_for_required_text(
             return value
         output_func(f"{label} is required.")
 
-def prompt_for_llm_mode(
-        existing: LLMConfig,
-        *,
-        input_func=input,
-        output_func=print) -> str:
-    """Prompt until the user selects a supported LLM mode."""
-    default_mode = normalize_llm_mode(existing.llm_mode)
-    prompt = f"LLM mode [1=API, 2=CODEX] ({default_mode}): "
-    while True:
-        answer = input_func(prompt).strip().upper()
-        if not answer:
-            return default_mode
-        if answer in {"1", "API"}:
-            return "API"
-        if answer in {"2", "CODEX"}:
-            return "CODEX"
-        output_func("LLM mode must be API or CODEX.")
-
 def prompt_for_llm_config(
         existing: LLMConfig | None = None,
         *,
@@ -253,46 +224,33 @@ def prompt_for_llm_config(
         require_endpoint_values: bool = False) -> tuple[LLMConfig, bool]:
     """Prompt for LLM settings and optionally ask whether to persist them."""
     existing = existing or LLMConfig()
-    output_func("Configure LLM settings.")
-    llm_mode = prompt_for_llm_mode(
-        existing,
-        input_func=input_func,
-        output_func=output_func,
-    )
-    if llm_mode == "CODEX":
-        ensure_codex_cli_available()
+    output_func("Configure API LLM settings.")
+    api_key = input_func("API key: ").strip() or existing.api_key
+    while not api_key:
+        output_func("API key is required.")
+        api_key = input_func("API key: ").strip()
 
-    if llm_mode == "API":
-        api_key = input_func("API key: ").strip() or existing.api_key
-        while not api_key:
-            output_func("API key is required.")
-            api_key = input_func("API key: ").strip()
-
-        if require_endpoint_values:
-            base_url = prompt_for_required_text(
-                "Base URL: ",
-                "Base URL",
-                input_func=input_func,
-                output_func=output_func,
-            )
-        else:
-            base_prompt = f"Base URL [{existing.base_url or DEFAULT_OPENAI_BASE_URL}]: "
-            base_url = input_func(base_prompt).strip() or existing.base_url or DEFAULT_OPENAI_BASE_URL
-
-        if require_endpoint_values:
-            model = prompt_for_required_text(
-                "Model: ",
-                "Model",
-                input_func=input_func,
-                output_func=output_func,
-            )
-        else:
-            model_prompt = f"Model [{existing.model or DEFAULT_OPENAI_MODEL}]: "
-            model = input_func(model_prompt).strip() or existing.model or DEFAULT_OPENAI_MODEL
+    if require_endpoint_values:
+        base_url = prompt_for_required_text(
+            "Base URL: ",
+            "Base URL",
+            input_func=input_func,
+            output_func=output_func,
+        )
     else:
-        api_key = ""
-        base_url = ""
-        model = ""
+        base_prompt = f"Base URL [{existing.base_url or DEFAULT_OPENAI_BASE_URL}]: "
+        base_url = input_func(base_prompt).strip() or existing.base_url or DEFAULT_OPENAI_BASE_URL
+
+    if require_endpoint_values:
+        model = prompt_for_required_text(
+            "Model: ",
+            "Model",
+            input_func=input_func,
+            output_func=output_func,
+        )
+    else:
+        model_prompt = f"Model [{existing.model or DEFAULT_OPENAI_MODEL}]: "
+        model = input_func(model_prompt).strip() or existing.model or DEFAULT_OPENAI_MODEL
 
     existing_window = _positive_int(
         existing.llm_window_frames,
@@ -316,7 +274,7 @@ def prompt_for_llm_config(
         base_url=base_url,
         model=model,
         llm_window_frames=llm_window_frames,
-        llm_mode=llm_mode,
+        llm_mode="API",
     ), persist
 
 def run_config_setup(
@@ -338,36 +296,119 @@ def run_config_setup(
     output_func(f"Saved config to {path}")
     return config
 
-def resolve_llm_config_for_run(
+def config_with_llm_mode(config: LLMConfig, llm_mode: str) -> LLMConfig:
+    """Return config values with the runtime LLM provider applied."""
+    normalized_mode = normalize_llm_mode(llm_mode)
+    if normalized_mode == "CODEX":
+        return LLMConfig(
+            api_key="",
+            base_url="",
+            model="",
+            llm_window_frames=_positive_int(
+                config.llm_window_frames,
+                DEFAULT_LLM_ACTION_WINDOW_FRAMES,
+            ),
+            llm_mode="CODEX",
+        )
+    return LLMConfig(
+        api_key=config.api_key,
+        base_url=config.base_url,
+        model=config.model,
+        llm_window_frames=_positive_int(
+            config.llm_window_frames,
+            DEFAULT_LLM_ACTION_WINDOW_FRAMES,
+        ),
+        llm_mode="API",
+    )
+
+def codex_cli_is_usable() -> bool:
+    """Return whether Codex CLI is available and satisfies the version requirement."""
+    try:
+        ensure_codex_cli_available()
+        return True
+    except LLMConfigError:
+        return False
+
+def prompt_for_runtime_llm_mode(
         *,
-        config_path: str | os.PathLike | None = None,
+        input_func=input,
+        output_func=print) -> str:
+    """Prompt for API or CODEX when both runtime modes are available."""
+    prompt = "LLM mode [1=API, 2=CODEX]: "
+    while True:
+        answer = input_func(prompt).strip().upper()
+        if answer in {"1", "API"}:
+            return "API"
+        if answer in {"2", "CODEX"}:
+            return "CODEX"
+        output_func("LLM mode must be API or CODEX.")
+
+def complete_api_config_or_prompt(
+        config: LLMConfig,
+        *,
+        config_path: str | os.PathLike,
         input_func=input,
         output_func=print) -> LLMConfig:
-    """Load config for `dino play --llm`, prompting if required values are absent."""
-    path = config_path or config_file_path()
-    if not os.path.exists(path):
-        return run_config_setup(
-            config_path=path,
-            input_func=input_func,
-            output_func=output_func,
-        )
-
-    config = load_llm_config(path)
-    if config.is_complete():
-        validate_llm_config(config)
-        return config
-
-    config, persist = prompt_for_llm_config(
-        config,
+    """Return a complete API config, prompting and optionally saving when needed."""
+    api_config = config_with_llm_mode(config, "API")
+    if api_config.is_complete():
+        return api_config
+    prompted, persist = prompt_for_llm_config(
+        api_config,
         input_func=input_func,
         output_func=output_func,
         ask_persist=True,
     )
     if persist:
-        save_llm_config(config, path)
-        output_func(f"Saved config to {path}")
-    validate_llm_config(config)
-    return config
+        save_llm_config(prompted, config_path)
+        output_func(f"Saved config to {config_path}")
+    return prompted
+
+def resolve_llm_config_for_run(
+        *,
+        config_path: str | os.PathLike | None = None,
+        llm_mode: str | None = None,
+        input_func=input,
+        output_func=print) -> LLMConfig:
+    """Load config for `dino play --llm`, prompting if required values are absent."""
+    path = config_path or config_file_path()
+    config = load_llm_config(path)
+    requested_mode = (
+        normalize_llm_mode(llm_mode)
+        if llm_mode is not None
+        else None
+    )
+
+    if requested_mode == "CODEX":
+        ensure_codex_cli_available()
+        return config_with_llm_mode(config, "CODEX")
+
+    if requested_mode == "API":
+        return complete_api_config_or_prompt(
+            config,
+            config_path=path,
+            input_func=input_func,
+            output_func=output_func,
+        )
+
+    api_config = config_with_llm_mode(config, "API")
+    api_available = api_config.is_complete()
+    codex_available = codex_cli_is_usable()
+    if api_available and codex_available:
+        selected_mode = prompt_for_runtime_llm_mode(
+            input_func=input_func,
+            output_func=output_func,
+        )
+        return config_with_llm_mode(api_config, selected_mode)
+    if codex_available:
+        return config_with_llm_mode(config, "CODEX")
+    if api_available:
+        return api_config
+    return run_config_setup(
+        config_path=path,
+        input_func=input_func,
+        output_func=output_func,
+    )
 
 def extract_response_text(result: dict) -> str:
     """Extract text from common OpenAI Responses API response shapes."""

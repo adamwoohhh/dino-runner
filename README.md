@@ -20,6 +20,30 @@ dino
 
 本地开发安装见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
+## 快速启动流程
+
+```bash
+# 不指定 llm 模式
+1. 完成安装，开始玩 `dino play --llm`
+2. 判断执行模式：
+    2.1. Codex 安装 + 本地已经配置 ak：询问使用哪种模式。
+    2.2. Codex 安装，本地未配置 ak：使用 CODEX 模式。
+    2.3. Codex 未安装，本地已经配置 ak：使用 API 模式。
+    2.4. Codex 未安装，本地未配置 ak：进入 setup 流程。
+
+# 指定 llm 模式为 CODEX
+1. 安装完成，开始玩 `dino play --llm codex`
+2. 判断本地 Codex 是否安装（符合版本要求）
+    2.1. Codex 安装，进入游戏。
+    2.2. Codex 未安装，提示安装，终止游戏。
+
+# 指定 llm 模式为 API
+1. 安装完成，开始玩 `dino play --llm api`
+2. 判断本地配置文件：
+    2.1. 已经配置 ak，进入游戏。
+    2.2. 未配置 ak，进入 setup 配置流程。
+```
+
 ## 启动
 
 ```bash
@@ -82,7 +106,9 @@ python3 -m dino_game.cli compete run.json
 |------|------|------|
 | `dino` / `dino play` | 手动操作恐龙 | 无 |
 | `dino play --auto` | 使用本地规则 Agent 自动决策 | 无 |
-| `dino play --llm` | 使用 OpenAI Responses API 决策 | `~/.config/ai-dino-in-terminal/config.json` 或启动时交互输入 |
+| `dino play --llm` | 自动选择 API 或 CODEX 模式 | API 配置或 Codex CLI |
+| `dino play --llm api` | 使用 OpenAI Responses API 决策 | `~/.config/ai-dino-in-terminal/config.json` 或启动时交互输入 |
+| `dino play --llm codex` | 使用本地 Codex CLI 决策 | Codex CLI，且版本满足要求 |
 | `dino play --llm --debug` | 使用 LLM 决策并写调试日志 | `logs/*.json` |
 | `dino replay` | 从历史运行记录列表选择并重放 | `replays/*.json` |
 | `dino replay run.json` | 直接从指定文件重放 | 对应 replay 文件 |
@@ -91,15 +117,14 @@ python3 -m dino_game.cli compete run.json
 | `dino compete` | 从历史运行记录列表选择一局并进入双赛道竞技 | `replays/*.json` |
 | `dino compete run.json` | 直接使用指定 replay 进入竞技模式 | 对应 replay 文件 |
 | `dino config` | 查看本地 LLM 配置（API key 脱敏显示） | 无 |
-| `dino config +setup` | 交互式写入本地 LLM 配置 | 选择 API 或 CODEX 模式 |
+| `dino config +setup` | 交互式写入本地 API LLM 配置 | API key / base_url / model |
 | `dino config +reset` | 重置本地 LLM 配置 | 无 |
 | `dino help` | 查看可用命令和公共参数 | 无 |
 
 LLM 配置文件固定保存在 `~/.config/ai-dino-in-terminal/config.json`。
-配置包含 `llm_mode`，可选 `API` 或 `CODEX`。当 `llm_mode` 为 `API` 时，`api_key`、`base_url` 和 `model` 为必填；
-当 `llm_mode` 为 `CODEX` 时，会跳过这些 API 参数，并要求本机 PATH 中能找到 Codex CLI。
-游戏运行时，`CODEX` 模式会通过 `codex exec --sandbox read-only --ephemeral --output-schema <schema>` 非交互调用本地 Codex。
-如果 `dino play --llm` 缺少必要配置，启动游戏前会提示补全；
+配置文件只包含 API 连接参数和 `llm_window_frames`，不保存 `llm_mode`；LLM 模式由 `dino play --llm api|codex` 的命令参数或快速启动流程自动选择。
+游戏运行时，`CODEX` 模式会检查本机 PATH 中的 Codex CLI 和版本要求，并通过 `codex exec --sandbox read-only --ephemeral --output-schema <schema>` 非交互调用本地 Codex。
+如果 API 模式缺少必要配置，启动游戏前会提示补全；
 输入完成后会询问是否持久化到本地配置，默认 `N`，仅本次运行使用。
 
 手动模式会在内存中记录当前局，Game Over 后界面提示 `S = 保存游戏记录`；只有按 `S` 才会把 replay 写入 `replays/` 目录，保存后提示变为 `已保存记录`，并继续停留在结束页面直到按 `R` 或 `Q`。默认文件名形如 `20260527-153012-manual-123456.json`。

@@ -167,11 +167,59 @@ class SessionsTest(unittest.TestCase):
         session.agent.token_usage_snapshot = mock.Mock(return_value=usage)
         session.recorder = mock.Mock()
 
-        draw_kwargs = session._llm_draw_kwargs()
+        draw_kwargs = session._llm_draw_kwargs(now=2.0)
         session._sync_llm_usage_to_recorder()
 
         session.recorder.set_llm_usage.assert_called_once_with(usage)
-        self.assertEqual(draw_kwargs["llm_usage_text"], "LLM tokens: 15")
+        self.assertEqual(draw_kwargs["llm_usage_text"], "LLM tokens: 0")
+
+    def test_llm_token_usage_display_rolls_up_within_two_seconds(self):
+        renderer = mock.Mock()
+        config = dino_game.LLMConfig("key", "https://example.test/v1", "model")
+        session = sessions.AgentSession(
+            stdscr=mock.Mock(),
+            renderer=renderer,
+            cli_args=CliArgs(command="play", mode="llm", llm_config=config),
+        )
+        session.agent.token_usage_snapshot = mock.Mock(return_value={
+            "prompt_tokens": 800,
+            "completion_tokens": 200,
+            "total_tokens": 1000,
+            "events": [],
+        })
+
+        self.assertEqual(
+            session._llm_draw_kwargs(now=10.0)["llm_usage_text"],
+            "LLM tokens: 0",
+        )
+        self.assertEqual(
+            session._llm_draw_kwargs(now=11.0)["llm_usage_text"],
+            "LLM tokens: 500",
+        )
+        self.assertEqual(
+            session._llm_draw_kwargs(now=12.0)["llm_usage_text"],
+            "LLM tokens: 1,000",
+        )
+
+        session.agent.token_usage_snapshot.return_value = {
+            "prompt_tokens": 1200,
+            "completion_tokens": 300,
+            "total_tokens": 1500,
+            "events": [],
+        }
+
+        self.assertEqual(
+            session._llm_draw_kwargs(now=12.5)["llm_usage_text"],
+            "LLM tokens: 1,000",
+        )
+        self.assertEqual(
+            session._llm_draw_kwargs(now=13.5)["llm_usage_text"],
+            "LLM tokens: 1,250",
+        )
+        self.assertEqual(
+            session._llm_draw_kwargs(now=14.5)["llm_usage_text"],
+            "LLM tokens: 1,500",
+        )
 
     def test_session_loads_and_persists_mode_high_score(self):
         renderer = mock.Mock()

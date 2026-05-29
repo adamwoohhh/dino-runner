@@ -29,6 +29,7 @@ class CliArgs:
     replay_action: str = "play"
     competition_path: str | None = None
     config_action: str = "show"
+    llm_mode: str | None = None
     llm_config: LLMConfig | None = None
     llm_debug: bool = False
     show_help: bool = False
@@ -96,10 +97,10 @@ def render_main_help() -> str:
 def render_command_help(command: str) -> str:
     """渲染某个子命令的完整用法和参数。"""
     if command == "play":
-        usage = "dino play [--auto|--llm] [--debug]"
+        usage = "dino play [--auto|--llm [api|codex]] [--debug]"
         options = [
             "  --auto           Run with the local rule-based agent",
-            "  --llm            Run with the configured LLM agent",
+            "  --llm [MODE]     Run with the LLM agent; MODE is api or codex",
             "  --debug          With --llm, write request and response JSON lines to logs/",
             "  Replay saving is offered after Game Over",
         ]
@@ -133,7 +134,7 @@ def render_command_help(command: str) -> str:
     elif command == "setup":
         usage = "dino setup"
         options = [
-            "  Prompts for llm_mode and related LLM settings",
+            "  Prompts for API LLM settings",
             "  Writes the answers to config.json",
         ]
     elif command == "help":
@@ -192,10 +193,19 @@ def parse_cli_args(args: list[str]) -> CliArgs:
         llm_debug, remaining = _split_debug_option(command_args)
         auto_requested = "--auto" in remaining
         llm_requested = "--llm" in remaining
-        remaining = [
-            arg for arg in remaining
-            if arg not in {"--auto", "--llm"}
-        ]
+        llm_mode = None
+        if llm_requested:
+            llm_index = remaining.index("--llm")
+            llm_tail = remaining[llm_index + 1:]
+            if len(llm_tail) > 1 or any(arg in {"--auto", "--llm"} for arg in llm_tail):
+                return CliArgs(command=command, show_help=True, help_text=render_command_help(command))
+            if llm_tail:
+                normalized_mode = llm_tail[0].strip().upper()
+                if normalized_mode not in {"API", "CODEX"}:
+                    return CliArgs(command=command, show_help=True, help_text=render_command_help(command))
+                llm_mode = normalized_mode
+            remaining = remaining[:llm_index]
+        remaining = [arg for arg in remaining if arg != "--auto"]
         if (
                 remaining
                 or (auto_requested and llm_requested)
@@ -209,6 +219,7 @@ def parse_cli_args(args: list[str]) -> CliArgs:
         return CliArgs(
             command=command,
             mode=mode,
+            llm_mode=llm_mode,
             llm_debug=llm_debug,
         )
 
@@ -295,7 +306,7 @@ def cli():
         return
     if cli_args.mode == "llm":
         try:
-            llm_config = resolve_llm_config_for_run()
+            llm_config = resolve_llm_config_for_run(llm_mode=cli_args.llm_mode)
         except KeyboardInterrupt:
             print("Setup cancelled.")
             return
@@ -309,6 +320,7 @@ def cli():
             replay_action=cli_args.replay_action,
             competition_path=cli_args.competition_path,
             config_action=cli_args.config_action,
+            llm_mode=cli_args.llm_mode,
             llm_config=llm_config,
             llm_debug=cli_args.llm_debug,
             show_help=cli_args.show_help,

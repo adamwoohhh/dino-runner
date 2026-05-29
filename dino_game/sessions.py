@@ -37,6 +37,8 @@ from .replay import (
 )
 from .scores import load_high_score, save_high_score
 
+LLM_TOKEN_USAGE_ANIMATION_SECONDS = 2.0
+
 
 class ReplayListSession:
     def __init__(self, stdscr):
@@ -94,6 +96,9 @@ class PlaySession:
         self.llm_lifeline_state = "idle"
         self.llm_lifeline_rewind_frames: list[tuple[int, DinoGame]] = []
         self.llm_lifeline_animation_frames_remaining = 0
+        self.llm_usage_animation_from = 0
+        self.llm_usage_animation_target = 0
+        self.llm_usage_animation_started_at: float | None = None
         self._remember_rewind_frame()
 
     def _new_game(self):
@@ -141,12 +146,50 @@ class PlaySession:
             return None
         return usage
 
-    def _llm_draw_kwargs(self) -> dict:
+    def _reset_llm_usage_animation(self):
+        self.llm_usage_animation_from = 0
+        self.llm_usage_animation_target = 0
+        self.llm_usage_animation_started_at = None
+
+    def _current_animated_llm_total(self, now: float) -> int:
+        started_at = self.llm_usage_animation_started_at
+        if started_at is None:
+            return self.llm_usage_animation_target
+        elapsed = max(0.0, now - started_at)
+        progress = min(1.0, elapsed / LLM_TOKEN_USAGE_ANIMATION_SECONDS)
+        if progress >= 1.0:
+            return self.llm_usage_animation_target
+        delta = self.llm_usage_animation_target - self.llm_usage_animation_from
+        return int(self.llm_usage_animation_from + delta * progress)
+
+    def _animated_llm_usage_total(self, total_tokens: int, now: float) -> int:
+        if total_tokens != self.llm_usage_animation_target:
+            current_total = self._current_animated_llm_total(now)
+            if total_tokens > self.llm_usage_animation_target:
+                self.llm_usage_animation_from = current_total
+                self.llm_usage_animation_target = total_tokens
+                self.llm_usage_animation_started_at = now
+            else:
+                self.llm_usage_animation_from = total_tokens
+                self.llm_usage_animation_target = total_tokens
+                self.llm_usage_animation_started_at = None
+        display_total = self._current_animated_llm_total(now)
+        if display_total >= self.llm_usage_animation_target:
+            self.llm_usage_animation_started_at = None
+            display_total = self.llm_usage_animation_target
+        return display_total
+
+    def _llm_draw_kwargs(self, now: float | None = None) -> dict:
         usage = self._llm_usage_snapshot()
         if not usage:
+            self._reset_llm_usage_animation()
             return {}
+        display_total = self._animated_llm_usage_total(
+            usage["total_tokens"],
+            now if now is not None else time.monotonic(),
+        )
         return {
-            "llm_usage_text": f"LLM tokens: {usage['total_tokens']:,}",
+            "llm_usage_text": f"LLM tokens: {display_total:,}",
         }
 
     def _sync_llm_usage_to_recorder(self):
@@ -180,7 +223,7 @@ class PlaySession:
                             self.agent,
                             self.event_frame + 1,
                         ),
-                        **self._llm_draw_kwargs(),
+                        **self._llm_draw_kwargs(now=now),
                     )
                     continue
 
@@ -203,7 +246,7 @@ class PlaySession:
                     ),
                     game_over_save_status=self.game_over_save_status,
                     game_over_retry_available=self._game_over_retry_available(),
-                    **self._llm_draw_kwargs(),
+                    **self._llm_draw_kwargs(now=now),
                 )
         except KeyboardInterrupt:
             return
@@ -249,6 +292,7 @@ class PlaySession:
             self.llm_lifeline_state = "idle"
             self.llm_lifeline_rewind_frames.clear()
             self.llm_lifeline_animation_frames_remaining = 0
+            self._reset_llm_usage_animation()
             self._remember_rewind_frame()
             if isinstance(self.agent, LLMAgent):
                 self.agent.reset_plan()
