@@ -1,6 +1,6 @@
-# T-Rex Run | 暴龙快跑
+![](./docs//readme//ac-banner.png)
 
-Chrome 断网小恐龙的终端版。可以手动玩，也可以让规则 Agent 或 OpenAI LLM Agent 自动玩。
+一个运行在终端里的像素游戏。当模型在干活儿的时候，你可以在终端里来一局恐龙快跑。
 
 ## 安装
 
@@ -18,9 +18,7 @@ pip install ai-dino-in-terminal
 dino
 ```
 
-本地开发安装见 [CONTRIBUTING.md](CONTRIBUTING.md)。
-
-## 快速启动流程
+## 快速启动
 
 ```bash
 # 不指定 llm 模式
