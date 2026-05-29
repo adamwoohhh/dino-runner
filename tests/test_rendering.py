@@ -25,6 +25,7 @@ class RendererHintTest(unittest.TestCase):
         self.assertIn("Q 退出", agent_hint)
         self.assertIn("Q 退出", replay_hint)
         self.assertIn("Q 退出", competition_hint)
+        self.assertIn("速度 1.8x", manual_hint)
         self.assertIn("竞技", competition_hint)
 
 

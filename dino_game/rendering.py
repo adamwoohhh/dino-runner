@@ -18,7 +18,7 @@ def footer_hint(agent_name: str, speed: float) -> str:
         return f"Enter 暂停 | Q 退出 | 回放 | 速度 {speed:.1f}x"
     if agent_name:
         return f"Enter 暂停 | Q 退出 | 速度 {speed:.1f}x"
-    return "SPACE/↑ 跳跃 | ↓ 蹲下 | Enter 暂停 | Q 退出"
+    return f"SPACE/↑ 跳跃 | ↓ 蹲下 | Enter 暂停 | Q 退出 | 速度 {speed:.1f}x"
 
 def loading_dino_blinks(animation_time: float) -> bool:
     return int(animation_time / LOADING_DINO_ANIM_INTERVAL) % 2 == 1
