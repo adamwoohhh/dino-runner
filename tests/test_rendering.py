@@ -94,6 +94,38 @@ class CachedFrameRendererTest(unittest.TestCase):
             for y, x, text, _ in renderer.scr.calls
         ))
 
+    def test_draw_renders_celestial_background(self):
+        dino_game = importlib.import_module("dino_game")
+
+        class FakeScreen:
+            def __init__(self):
+                self.calls = []
+
+            def erase(self):
+                pass
+
+            def getmaxyx(self):
+                return (24, 120)
+
+            def addstr(self, y, x, text, attr=0):
+                self.calls.append((y, x, text, attr))
+
+            def refresh(self):
+                pass
+
+        game = dino_game.DinoGame()
+        game.celestial = {"kind": "moon", "x": 90.0, "y": 2}
+        renderer = dino_game.Renderer.__new__(dino_game.Renderer)
+        renderer.scr = FakeScreen()
+
+        with mock.patch.object(dino_game.curses, "color_pair", side_effect=lambda value: value):
+            renderer.draw(game, "")
+
+        self.assertTrue(any(
+            text in dino_game.MOON
+            for _, _, text, _ in renderer.scr.calls
+        ))
+
 
 class GameOverSavePromptTest(unittest.TestCase):
     def rendered_text(self, save_status, retry_available=False, agent_name=""):

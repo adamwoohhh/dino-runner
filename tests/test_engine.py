@@ -65,6 +65,59 @@ class GameTuningTest(unittest.TestCase):
             dino_game.NORMAL_OBSTACLE_SPAWN_X,
         )
 
+    def test_celestial_background_starts_at_score_threshold(self):
+        dino_game = importlib.import_module("dino_game")
+        game = dino_game.DinoGame(rng=dino_game.random.Random(123))
+        game.score = dino_game.CELESTIAL_SCORE_THRESHOLD - 2
+        game.spawn_timer = 9999
+
+        game.update()
+
+        self.assertIsNone(game.celestial)
+
+        game.update()
+
+        self.assertIsNotNone(game.celestial)
+        self.assertEqual(game.celestial["kind"], "sun")
+        self.assertLess(game.celestial["x"], game.obstacle_spawn_x)
+
+    def test_celestial_background_moves_at_tenth_obstacle_speed(self):
+        dino_game = importlib.import_module("dino_game")
+        game = dino_game.DinoGame(rng=dino_game.random.Random(123))
+        game.score = dino_game.CELESTIAL_SCORE_THRESHOLD
+        game.spawn_timer = 9999
+        game.clouds = [{"x": 100.0, "y": 2}]
+        game.celestial = {"kind": "sun", "x": 100.0, "y": 2}
+
+        game.update()
+
+        self.assertAlmostEqual(game.celestial["x"], 100.0 - game.speed * 0.1)
+        self.assertGreater(game.celestial["x"], game.clouds[0]["x"])
+
+    def test_celestial_background_alternates_after_empty_gap(self):
+        dino_game = importlib.import_module("dino_game")
+        game = dino_game.DinoGame(rng=dino_game.random.Random(123))
+        game.score = dino_game.CELESTIAL_SCORE_THRESHOLD
+        game.spawn_timer = 9999
+        game.celestial = {
+            "kind": "sun",
+            "x": -dino_game.celestial_art_width("sun"),
+            "y": 2,
+        }
+
+        game.update()
+
+        self.assertIsNone(game.celestial)
+
+        for _ in range(dino_game.CELESTIAL_EMPTY_GAP_FRAMES):
+            game.update()
+            self.assertIsNone(game.celestial)
+
+        game.update()
+
+        self.assertIsNotNone(game.celestial)
+        self.assertEqual(game.celestial["kind"], "moon")
+
     def test_llm_state_forecasts_future_obstacles_without_changing_game_state(self):
         dino_game = importlib.import_module("dino_game")
         rng = dino_game.random.Random(123)

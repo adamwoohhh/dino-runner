@@ -93,6 +93,24 @@ class Renderer:
             except curses.error:
                 pass                 # 忽略右下角写入异常
 
+    def draw_celestial(self, celestial: dict | None, y_offset: int = 0):
+        """Draw the decorative sun/moon background sprite."""
+        if not celestial:
+            return
+        art = CELESTIAL_ART.get(celestial.get("kind"))
+        if not art:
+            return
+        x = int(celestial["x"])
+        y = y_offset + int(celestial.get("y", CELESTIAL_Y))
+        color_pair = 3 if celestial.get("kind") == "sun" else 4
+        for i, line in enumerate(art):
+            self.safe_addstr(
+                y + i,
+                x,
+                line,
+                curses.color_pair(color_pair) | curses.A_BOLD,
+            )
+
     def draw_competition_lane(
             self,
             game: DinoGame,
@@ -116,6 +134,8 @@ class Renderer:
             score_text,
             curses.A_BOLD | curses.color_pair(3),
         )
+
+        self.draw_celestial(game.celestial, y_offset=header_y)
 
         if game.ducking:
             art = DINO_DUCK
@@ -390,6 +410,7 @@ class Renderer:
             cy = c["y"]
             for i, line in enumerate(CLOUD):
                 self.safe_addstr(cy + i, cx, line, curses.color_pair(4) | curses.A_DIM)
+        self.draw_celestial(game.celestial)
 
         # ── 恐龙 ──
         # 根据状态选择动画帧

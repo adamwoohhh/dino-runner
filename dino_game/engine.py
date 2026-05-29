@@ -2,7 +2,7 @@
 
 import random
 
-from .art import CACTUS_PLANT_ART, OBSTACLE_ART
+from .art import CACTUS_PLANT_ART, OBSTACLE_ART, celestial_art_width
 from .constants import *
 
 def difficulty_for_score(score: int) -> float:
@@ -211,6 +211,9 @@ class DinoGame:
         self.jumping = False    # 是否正在跳跃（含上升和下落全程）
         self.obstacles: list[Obstacle] = []
         self.clouds: list[dict] = []   # 装饰云朵 [{x, y}, ...]
+        self.celestial: dict | None = None  # 背景天体 {kind, x, y}
+        self.next_celestial_kind = "sun"
+        self.celestial_gap_remaining = 0
         self.score = 0          # 当前分数（每帧 +1）
         self.high_score = 0     # 历史最高分（跨局保持）
         self.speed = INITIAL_SPEED
@@ -219,6 +222,33 @@ class DinoGame:
         self.frame = 0          # 帧计数器（用于动画切换）
         self.spawn_timer = self.rng.randint(SPAWN_MIN, SPAWN_MAX)
         self.ground_offset = 0  # 地面纹理滚动偏移（视觉效果）
+
+    def _spawn_celestial(self):
+        self.celestial = {
+            "kind": self.next_celestial_kind,
+            "x": float(self.obstacle_spawn_x),
+            "y": CELESTIAL_Y,
+        }
+
+    def _update_celestial(self):
+        if self.score < CELESTIAL_SCORE_THRESHOLD:
+            return
+
+        if self.celestial is None:
+            if self.celestial_gap_remaining > 0:
+                self.celestial_gap_remaining -= 1
+                return
+            self._spawn_celestial()
+
+        if self.celestial is None:
+            return
+
+        self.celestial["x"] -= self.speed * CELESTIAL_SPEED_MULTIPLIER
+        kind = self.celestial["kind"]
+        if self.celestial["x"] <= -celestial_art_width(kind):
+            self.celestial = None
+            self.next_celestial_kind = "moon" if kind == "sun" else "sun"
+            self.celestial_gap_remaining = CELESTIAL_EMPTY_GAP_FRAMES
 
     def jump(self):
         """发起跳跃 — 只有站在地面时才能起跳"""
@@ -428,6 +458,7 @@ class DinoGame:
         for c in self.clouds:
             c["x"] -= self.speed * 0.3      # 云移动速度 = 30% 障碍物速度（视差效果）
         self.clouds = [c for c in self.clouds if c["x"] > -8]
+        self._update_celestial()
 
         # ── 5. 装饰: 地面滚动 ──
         self.ground_offset = (self.ground_offset + self.speed) % 4

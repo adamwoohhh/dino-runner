@@ -124,6 +124,31 @@ CLOUD = [                 # 装饰性云朵（不参与碰撞）
     "░░░░░░",
 ]
 
+SUN = [                   # 背景太阳（不参与碰撞）
+    r" \ | / ",
+    r"-- O --",
+    r" / | \ ",
+]
+
+MOON = [                  # 背景月亮（不参与碰撞）
+    r"  __ ",
+    r" /  `",
+    r"|    ",
+    r" \__.",
+]
+
+CELESTIAL_ART = {
+    "sun": SUN,
+    "moon": MOON,
+}
+
+
+def celestial_art_width(kind: str) -> int:
+    """Return the display width for a background celestial sprite."""
+    art = CELESTIAL_ART[kind]
+    return max(len(line) for line in art)
+
+
 OBSTACLE_ART = {
     "cactus_sm": CACTUS_SM,
     "cactus_lg": CACTUS_LG,
