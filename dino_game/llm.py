@@ -3,7 +3,9 @@
 import json
 import math
 import os
+import re
 import shutil
+import subprocess
 import threading
 from dataclasses import dataclass
 
@@ -15,6 +17,9 @@ from .llm_client import CodexLLMClient, LLMClient
 
 class LLMConfigError(RuntimeError):
     """Raised when the selected LLM mode cannot be configured or run."""
+
+
+MIN_CODEX_CLI_VERSION = "0.133.0"
 
 @dataclass(frozen=True)
 class LLMConfig:
@@ -53,12 +58,52 @@ def codex_cli_path() -> str | None:
     """Return the Codex CLI path if it is available on PATH."""
     return shutil.which("codex")
 
+def parse_codex_cli_version(text: str) -> tuple[int, int, int] | None:
+    """Extract a semantic Codex CLI version from command output."""
+    match = re.search(r"\b(\d+)\.(\d+)\.(\d+)\b", text)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.groups())
+
+def format_version(version: tuple[int, int, int]) -> str:
+    return ".".join(str(part) for part in version)
+
+def codex_cli_version(codex_path: str) -> tuple[int, int, int] | None:
+    """Return the installed Codex CLI version, if it can be read."""
+    try:
+        completed = subprocess.run(
+            [codex_path, "--version"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if completed.returncode != 0:
+        return None
+    return parse_codex_cli_version(
+        f"{completed.stdout or ''}\n{completed.stderr or ''}",
+    )
+
 def ensure_codex_cli_available():
-    """Fail early when CODEX mode is selected but the Codex CLI is unavailable."""
-    if codex_cli_path() is None:
+    """Fail early when CODEX mode is selected but Codex CLI is missing or too old."""
+    path = codex_cli_path()
+    if path is None:
         raise LLMConfigError(
             "Codex CLI is not installed or not found in PATH. "
             "Install Codex and retry CODEX mode."
+        )
+    installed_version = codex_cli_version(path)
+    minimum_version = parse_codex_cli_version(MIN_CODEX_CLI_VERSION)
+    if installed_version is None or minimum_version is None:
+        raise LLMConfigError(
+            "Unable to determine Codex CLI version. "
+            f"CODEX mode requires >= {MIN_CODEX_CLI_VERSION}."
+        )
+    if installed_version < minimum_version:
+        raise LLMConfigError(
+            f"Codex CLI version {format_version(installed_version)} is installed; "
+            f"CODEX mode requires >= {MIN_CODEX_CLI_VERSION}."
         )
 
 def validate_llm_config(config: LLMConfig):

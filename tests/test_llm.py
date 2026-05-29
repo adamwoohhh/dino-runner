@@ -12,6 +12,9 @@ class LLMConfigTest(unittest.TestCase):
     def dino_game(self):
         return importlib.import_module("dino_game")
 
+    def codex_version_result(self, version="codex-cli 0.133.0\n"):
+        return mock.Mock(returncode=0, stdout=version, stderr="")
+
     def test_config_file_path_uses_user_config_directory(self):
         dino_game = self.dino_game()
 
@@ -126,7 +129,8 @@ class LLMConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = pathlib.Path(temp_dir) / "config.json"
 
-            with mock.patch("shutil.which", return_value="/usr/bin/codex"):
+            with mock.patch("shutil.which", return_value="/usr/bin/codex"), \
+                    mock.patch("subprocess.run", return_value=self.codex_version_result()):
                 config = dino_game.run_config_setup(
                     config_path=config_path,
                     input_func=lambda prompt: next(answers),
@@ -163,6 +167,44 @@ class LLMConfigTest(unittest.TestCase):
 
             self.assertIn("Codex CLI is not installed", str(error.exception))
             self.assertFalse(config_path.exists())
+
+    def test_codex_cli_version_text_parses_current_machine_version(self):
+        dino_game = self.dino_game()
+
+        self.assertEqual(
+            dino_game.parse_codex_cli_version(
+                "WARNING: proceeding, even though we could not update PATH\n"
+                "codex-cli 0.133.0\n"
+            ),
+            (0, 133, 0),
+        )
+
+    def test_codex_mode_rejects_cli_below_minimum_version(self):
+        dino_game = self.dino_game()
+
+        with mock.patch("shutil.which", return_value="/usr/bin/codex"), \
+                mock.patch(
+                    "subprocess.run",
+                    return_value=self.codex_version_result("codex-cli 0.132.0\n"),
+                ), \
+                self.assertRaises(dino_game.LLMConfigError) as error:
+            dino_game.ensure_codex_cli_available()
+
+        self.assertIn("Codex CLI version 0.132.0", str(error.exception))
+        self.assertIn("requires >= 0.133.0", str(error.exception))
+
+    def test_codex_mode_rejects_unreadable_cli_version(self):
+        dino_game = self.dino_game()
+
+        with mock.patch("shutil.which", return_value="/usr/bin/codex"), \
+                mock.patch(
+                    "subprocess.run",
+                    return_value=self.codex_version_result("codex nightly\n"),
+                ), \
+                self.assertRaises(dino_game.LLMConfigError) as error:
+            dino_game.ensure_codex_cli_available()
+
+        self.assertIn("Unable to determine Codex CLI version", str(error.exception))
 
     def test_resolve_llm_config_rejects_saved_codex_mode_without_codex_cli(self):
         dino_game = self.dino_game()
@@ -690,7 +732,11 @@ class LLMAgentOpenAITest(unittest.TestCase):
         dino_game = self.dino_game()
         config = dino_game.LLMConfig(llm_mode="CODEX")
 
-        with mock.patch("shutil.which", return_value="/usr/bin/codex"):
+        with mock.patch("shutil.which", return_value="/usr/bin/codex"), \
+                mock.patch(
+                    "subprocess.run",
+                    return_value=mock.Mock(returncode=0, stdout="codex-cli 0.133.0\n", stderr=""),
+                ):
             agent = dino_game.LLMAgent(config)
 
         self.assertEqual(agent.client.__class__.__name__, "CodexLLMClient")
@@ -713,6 +759,7 @@ class LLMAgentOpenAITest(unittest.TestCase):
         }
 
         with mock.patch("shutil.which", return_value="/usr/bin/codex"), \
+                mock.patch("dino_game.llm.ensure_codex_cli_available"), \
                 mock.patch("subprocess.run", return_value=completed) as run:
             agent = dino_game.LLMAgent(config)
             agent._call_llm(
@@ -1048,6 +1095,7 @@ class LLMAgentOpenAITest(unittest.TestCase):
         )
 
         with mock.patch("shutil.which", return_value="/usr/bin/codex"), \
+                mock.patch("dino_game.llm.ensure_codex_cli_available"), \
                 mock.patch("subprocess.run", return_value=completed):
             agent = dino_game.LLMAgent(config)
             agent._call_llm(
