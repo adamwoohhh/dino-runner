@@ -1,4 +1,4 @@
-![](./docs//readme//ac-banner.png)
+![](./docs//readme//ac-playing-2.png)
 
 一个运行在终端里的像素游戏。当模型在干活儿的时候，你可以在终端里来一局恐龙快跑。
 
@@ -114,20 +114,8 @@ Replay 文件是 JSON，包含随机种子、运行模式、总帧数、`actions
 
 竞技模式会在同一屏幕渲染两条赛道：上方是源 replay 的历史记录，下方是玩家实时操作。两条赛道在源 replay 范围内使用相同的 seed 和障碍物数据；如果玩家超过源 replay 的帧数仍未结束，会继续用源 seed 实时生成障碍物。竞技结束后会写入新的 replay，并额外包含 `competitive: true` 和 `source_replay` 字段用于关联原始记录。
 
-## 操控
-
-| 按键 | 作用 |
-|------|------|
-| `SPACE` / `↑` | 跳跃 |
-| `↓` | 蹲下（地面）/ 快速下落（空中） |
-| `Enter` | 暂停；暂停时再次按下会倒计时 3 秒后继续 |
-| `R` | Game Over 后重新开始 |
-| `Q` | 退出 |
-
 ## 运行要求
 
 - Python 3.11+
 - 支持 `curses` 的终端环境
 - 游戏本身无第三方运行时依赖
-
-开发、测试、架构和扩展 Agent 的说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。
