@@ -101,7 +101,7 @@ def render_command_help(command: str) -> str:
         usage = "dino play [--llm [api|codex]] [--debug]"
         options = [
             "  --llm [MODE]     Run with the LLM agent; MODE is api or codex",
-            "  --debug          With --llm, write request and response JSON lines to logs/",
+            "  --debug          With --llm, write request and response JSONL to logs/*.jsonl",
             "  Replay saving is offered after Game Over",
         ]
     elif command == "dashboard":

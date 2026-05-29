@@ -60,6 +60,7 @@ class CliContractTest(unittest.TestCase):
         self.assertNotIn("--auto", play_help)
         self.assertIn("--llm", play_help)
         self.assertIn("--debug", play_help)
+        self.assertIn("logs/*.jsonl", play_help)
         self.assertNotIn("--record", play_help)
         self.assertIn("Usage: dino replay [FILE]", replay_help)
         self.assertIn("dino replay +list", replay_help)

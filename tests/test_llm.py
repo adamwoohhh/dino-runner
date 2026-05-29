@@ -1050,7 +1050,7 @@ class LLMAgentOpenAITest(unittest.TestCase):
             model="gpt-test",
         )
         with tempfile.TemporaryDirectory() as temp_dir:
-            log_path = pathlib.Path(temp_dir) / "logs" / "run.json"
+            log_path = pathlib.Path(temp_dir) / "logs" / "run.jsonl"
             agent = dino_game.LLMAgent(config, debug=True, debug_path=log_path)
 
             class FakeResponse:
@@ -1273,7 +1273,7 @@ class LLMAgentOpenAITest(unittest.TestCase):
             model="gpt-test",
         )
         with tempfile.TemporaryDirectory() as temp_dir:
-            log_path = pathlib.Path(temp_dir) / "logs" / "run.json"
+            log_path = pathlib.Path(temp_dir) / "logs" / "run.jsonl"
             agent = dino_game.LLMAgent(config, debug=True, debug_path=log_path)
             game = dino_game.DinoGame()
             game.spawn_timer = 9999
@@ -1299,7 +1299,7 @@ class LLMAgentOpenAITest(unittest.TestCase):
 
         self.assertEqual(
             dino_game.debug_log_path_for_replay("replays/20260527-llm-123.json"),
-            os.path.join("logs", "20260527-llm-123.json"),
+            os.path.join("logs", "20260527-llm-123.jsonl"),
         )
 
     def test_llm_fallback_window_becomes_the_requested_coverage(self):

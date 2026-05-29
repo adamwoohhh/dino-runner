@@ -127,6 +127,68 @@ class CachedFrameRendererTest(unittest.TestCase):
         ))
 
 
+class TrackLayoutRendererTest(unittest.TestCase):
+    class FakeScreen:
+        def __init__(self, height=40, width=120):
+            self.height = height
+            self.width = width
+            self.calls = []
+
+        def erase(self):
+            pass
+
+        def getmaxyx(self):
+            return (self.height, self.width)
+
+        def addstr(self, y, x, text, attr=0):
+            self.calls.append((y, x, text, attr))
+
+        def refresh(self):
+            pass
+
+    def test_single_track_is_vertically_centered_in_tall_terminal(self):
+        dino_game = importlib.import_module("dino_game")
+        renderer = dino_game.Renderer.__new__(dino_game.Renderer)
+        renderer.scr = self.FakeScreen(height=40, width=120)
+
+        with mock.patch.object(dino_game.curses, "color_pair", side_effect=lambda value: value):
+            renderer.draw(dino_game.DinoGame(), "")
+
+        ground_rows = [
+            y for y, x, text, _ in renderer.scr.calls
+            if x == 0 and text.startswith("▁")
+        ]
+
+        self.assertEqual(ground_rows, [23])
+
+    def test_competition_tracks_are_centered_with_gap_between_lanes(self):
+        dino_game = importlib.import_module("dino_game")
+        renderer = dino_game.Renderer.__new__(dino_game.Renderer)
+        renderer.scr = self.FakeScreen(height=40, width=120)
+        competition = mock.Mock()
+        competition.history_game = dino_game.DinoGame()
+        competition.player_game = dino_game.DinoGame()
+        competition.history_finished = False
+        competition.player_finished = False
+        competition.finished = False
+
+        with mock.patch.object(dino_game.curses, "color_pair", side_effect=lambda value: value):
+            renderer.draw_competition(competition)
+
+        ground_rows = [
+            y for y, x, text, _ in renderer.scr.calls
+            if x == 0 and text.startswith("▁")
+        ]
+        separator_rows = [
+            y for y, x, text, _ in renderer.scr.calls
+            if x == 0 and text.startswith("─")
+        ]
+
+        self.assertEqual(ground_rows, [15, 32])
+        self.assertEqual(separator_rows, [17])
+        self.assertEqual(ground_rows[1] - ground_rows[0], 17)
+
+
 class GameOverSavePromptTest(unittest.TestCase):
     def rendered_text(self, save_status, retry_available=False, agent_name=""):
         dino_game = importlib.import_module("dino_game")

@@ -50,8 +50,10 @@ def record_path_for_run(
     return f"{root}-{run_index}{ext or '.json'}"
 
 def debug_log_path_for_replay(replay_path: str | os.PathLike, directory: str = "logs") -> str:
-    """Return the debug log path that mirrors a replay filename under logs/."""
-    return os.path.join(directory, os.path.basename(os.fspath(replay_path)))
+    """Return the JSONL debug log path that mirrors a replay filename under logs/."""
+    basename = os.path.basename(os.fspath(replay_path))
+    root, _ext = os.path.splitext(basename)
+    return os.path.join(directory, f"{root}.jsonl")
 
 def list_replay_files(directory: str = REPLAY_DIR) -> list[str]:
     """列出 replay JSON 文件，按最近修改时间倒序。"""

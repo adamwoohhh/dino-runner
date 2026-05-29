@@ -75,6 +75,29 @@ class SessionsTest(unittest.TestCase):
         self.assertEqual(stdscr.nodelay_calls[-1], True)
         self.assertEqual(stdscr.timeout_calls[-1], dino_game.FRAME_MS)
 
+    def test_competition_session_uses_manual_filename_mode_for_replay_path(self):
+        stdscr = self.FakeScreen()
+        renderer = mock.Mock()
+        session = sessions.CompetitionSession(
+            stdscr=stdscr,
+            renderer=renderer,
+            cli_args=CliArgs(command="compete", mode="competitive"),
+            replay_path="source.json",
+        )
+        replay_player = dino_game.ReplayPlayer(seed=123456, actions=[], obstacles=[])
+
+        with (
+            mock.patch("dino_game.sessions.ReplayPlayer.from_file", return_value=replay_player),
+            mock.patch("dino_game.sessions.default_replay_path", return_value="replays/manual-name.json") as default_path,
+            mock.patch("dino_game.sessions.CompetitionRun") as competition_run,
+            mock.patch("dino_game.sessions.run_competition_loop") as run_loop,
+        ):
+            session.run()
+
+        default_path.assert_called_once_with("manual", 123456)
+        self.assertEqual(competition_run.call_args.kwargs["record_path"], "replays/manual-name.json")
+        run_loop.assert_called_once()
+
     def test_replay_session_run_advances_frames_without_keypress(self):
         stdscr = self.FakeScreen(keys=[-1, -1, ord("q")])
         renderer = mock.Mock()

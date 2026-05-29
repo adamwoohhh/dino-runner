@@ -121,7 +121,7 @@ class CompetitionSession:
             self.replay_path,
             playback_playfield_width=self.obstacle_spawn_x,
         )
-        record_path = default_replay_path("competitive", replay_player.seed)
+        record_path = default_replay_path("manual", replay_player.seed)
         competition = CompetitionRun(
             replay_player,
             source_replay=self.replay_path,

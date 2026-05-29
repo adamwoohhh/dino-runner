@@ -10,6 +10,11 @@ from .input import PauseState, pause_overlay_lines
 from .llm import CachedFrameWindow
 from .scores import format_compact_tokens
 
+LANE_VISUAL_HEIGHT = 9
+LANE_GAP_ROWS = 8
+TRACK_TOP_RESERVED_ROWS = 2
+TRACK_BOTTOM_RESERVED_ROWS = 2
+
 def footer_hint(agent_name: str, speed: float) -> str:
     """根据当前模式返回底部操作提示。"""
     if agent_name == "Competition":
@@ -42,6 +47,45 @@ def dino_art_for_state(
     if (game.frame // RUN_ANIM_FRAME_INTERVAL) % 2 == 0:
         return DINO_RUN_1
     return DINO_RUN_2
+
+def centered_ground_row(
+        screen_height: int,
+        *,
+        lane_height: int = LANE_VISUAL_HEIGHT,
+        top_reserved: int = TRACK_TOP_RESERVED_ROWS,
+        bottom_reserved: int = TRACK_BOTTOM_RESERVED_ROWS) -> int:
+    """Return a ground row that vertically centers one game lane."""
+    max_ground = max(0, screen_height - bottom_reserved - 1)
+    available_height = max(1, max_ground - top_reserved + 1)
+    if available_height >= lane_height:
+        lane_top = top_reserved + (available_height - lane_height) // 2
+        return lane_top + lane_height - 1
+    return max_ground
+
+def centered_competition_ground_rows(
+        screen_height: int,
+        *,
+        lane_height: int = LANE_VISUAL_HEIGHT,
+        preferred_gap: int = LANE_GAP_ROWS,
+        minimum_gap: int = 1,
+        top_reserved: int = TRACK_TOP_RESERVED_ROWS,
+        bottom_reserved: int = TRACK_BOTTOM_RESERVED_ROWS) -> tuple[int, int]:
+    """Return ground rows for two vertically centered competition lanes."""
+    max_ground = max(0, screen_height - bottom_reserved - 1)
+    available_height = max(1, max_ground - top_reserved + 1)
+    if available_height >= lane_height * 2 + minimum_gap:
+        gap = min(preferred_gap, max(minimum_gap, available_height - lane_height * 2))
+    else:
+        gap = minimum_gap
+    total_height = lane_height * 2 + gap
+    first_lane_top = top_reserved + max(0, (available_height - total_height) // 2)
+    top_ground = first_lane_top + lane_height - 1
+    bottom_ground = top_ground + gap + lane_height
+    if bottom_ground > max_ground:
+        shift = bottom_ground - max_ground
+        top_ground = max(0, top_ground - shift)
+        bottom_ground = max_ground
+    return top_ground, bottom_ground
 
 class Renderer:
     """curses 终端渲染器
@@ -198,9 +242,8 @@ class Renderer:
         title = " DINO RUNNER [竞技模式] "
         self.safe_addstr(0, 2, title, curses.A_BOLD | curses.color_pair(1))
 
-        top_ground = max(8, min(10, h // 2 - 2))
-        bottom_ground = min(h - 3, max(top_ground + 8, h - 3))
-        separator_y = min(h - 2, max(top_ground + 1, (top_ground + bottom_ground) // 2))
+        top_ground, bottom_ground = centered_competition_ground_rows(h)
+        separator_y = min(h - 2, max(top_ground + 1, top_ground + 2))
         self.safe_addstr(separator_y, 0, "─" * max(0, w - 1), curses.A_DIM)
 
         history_status = "撞毁" if competition.history_game.game_over else "结束"
@@ -388,7 +431,7 @@ class Renderer:
         """
         self.scr.erase()
         h, w = self.scr.getmaxyx()
-        ground_row = min(GROUND_ROW, h - 5)  # 终端太小时自动上移
+        ground_row = centered_ground_row(h)
 
         # ── 标题栏 ──
         title = " DINO RUNNER "
