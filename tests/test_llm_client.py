@@ -87,8 +87,9 @@ class LLMClientTest(unittest.TestCase):
         captured = {}
 
         def fake_run(command, **kwargs):
-            captured["schema_path"] = command[6]
-            with open(command[6], "r", encoding="utf-8") as f:
+            schema_path = command[command.index("--output-schema") + 1]
+            captured["schema_path"] = schema_path
+            with open(schema_path, "r", encoding="utf-8") as f:
                 captured["schema"] = json.load(f)
             return completed
 
@@ -112,6 +113,7 @@ class LLMClientTest(unittest.TestCase):
                 "--sandbox",
                 "read-only",
                 "--ephemeral",
+                "--skip-git-repo-check",
                 "--output-schema",
                 mock.ANY,
                 "plan",
@@ -120,7 +122,8 @@ class LLMClientTest(unittest.TestCase):
             text=True,
             check=False,
         )
-        schema_path = run.call_args.args[0][6]
+        command = run.call_args.args[0]
+        schema_path = command[command.index("--output-schema") + 1]
         self.assertEqual(captured.get("schema_path"), schema_path)
         self.assertEqual(captured.get("schema"), schema)
         self.assertEqual(response.response_text, '{"start_frame": 10, "actions": ["jump"]}')

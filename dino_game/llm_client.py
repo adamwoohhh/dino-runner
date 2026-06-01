@@ -130,6 +130,7 @@ class CodexLLMClient:
             "--sandbox",
             "read-only",
             "--ephemeral",
+            "--skip-git-repo-check",
         ]
         if isinstance(schema, dict):
             with tempfile.NamedTemporaryFile(
