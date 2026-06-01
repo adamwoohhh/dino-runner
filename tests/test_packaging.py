@@ -43,6 +43,7 @@ class PackagingTest(unittest.TestCase):
         self.assertIn("install.sh", readme)
         self.assertIn("GitHub Release", readme)
         self.assertIn("curl -fsSL", readme)
+        self.assertIn("latest release", readme)
         self.assertIn("DINO_INSTALL_SOURCE=github", readme)
 
     def test_readme_documents_tag_triggered_github_release_publish(self):
@@ -84,9 +85,12 @@ class PackagingTest(unittest.TestCase):
 
     def test_install_script_installs_release_wheel_without_pypi_or_pipx(self):
         install_script = (self.project_root() / "install.sh").read_text()
-        pyproject = self.load_pyproject()
 
-        self.assertIn(f"DEFAULT_VERSION=\"{pyproject['project']['version']}\"", install_script)
+        self.assertIn("DEFAULT_VERSION=\"latest\"", install_script)
+        self.assertIn("resolve_latest_version", install_script)
+        self.assertIn("/releases/latest", install_script)
+        self.assertIn("url_effective", install_script)
+        self.assertIn("/download/$latest_tag", install_script)
         self.assertIn("DINO_INSTALL_SOURCE=\"${DINO_INSTALL_SOURCE:-github}\"", install_script)
         self.assertIn("DEFAULT_REPO=\"https://github.com/adamwoohhh/agents-competition\"", install_script)
         self.assertIn("/releases/download/v$DINO_VERSION", install_script)

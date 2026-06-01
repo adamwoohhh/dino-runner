@@ -3,7 +3,7 @@ set -euo pipefail
 
 APP_NAME="ai-dino-in-terminal"
 COMMAND_NAME="dino"
-DEFAULT_VERSION="0.1.1"
+DEFAULT_VERSION="latest"
 DEFAULT_REPO="https://github.com/adamwoohhh/agents-competition"
 
 DINO_VERSION="${DINO_VERSION:-$DEFAULT_VERSION}"
@@ -59,6 +59,24 @@ download() {
   fi
 }
 
+resolve_latest_version() {
+  command -v curl >/dev/null 2>&1 || fail "curl is required to resolve the latest GitHub release; set DINO_VERSION to install a fixed version"
+
+  latest_url="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$DINO_REPO/releases/latest")"
+  latest_tag="${latest_url##*/}"
+  [ "$latest_tag" != "$latest_url" ] || fail "could not resolve latest GitHub release tag"
+  case "$latest_tag" in
+    v*) ;;
+    *) fail "latest GitHub release tag must start with 'v': $latest_tag" ;;
+  esac
+
+  latest_version="${latest_tag#v}"
+  RELEASE_BASE_URL="${latest_url%/tag/*}/download/$latest_tag"
+
+  DINO_VERSION="$latest_version"
+  WHEEL_URL="$RELEASE_BASE_URL/ai_dino_in_terminal-${DINO_VERSION}-py3-none-any.whl"
+}
+
 uninstall() {
   rm -f "$DINO_BIN_DIR/$COMMAND_NAME"
   rm -rf "$DINO_HOME"
@@ -73,16 +91,28 @@ fi
 PYTHON_BIN="$(find_python)"
 require_python_311 "$PYTHON_BIN"
 
-WHEEL_NAME="ai_dino_in_terminal-${DINO_VERSION}-py3-none-any.whl"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 if [ -n "${DINO_WHEEL_PATH:-}" ]; then
   WHEEL_PATH="$DINO_WHEEL_PATH"
+  if [ "$DINO_VERSION" = "latest" ]; then
+    wheel_file="${WHEEL_PATH##*/}"
+    parsed_version="${wheel_file#ai_dino_in_terminal-}"
+    parsed_version="${parsed_version%-py3-none-any.whl}"
+    if [ "$parsed_version" != "$wheel_file" ]; then
+      DINO_VERSION="$parsed_version"
+    fi
+  fi
 elif [ "$DINO_INSTALL_SOURCE" = "github" ]; then
+  if [ "$DINO_VERSION" = "latest" ]; then
+    resolve_latest_version
+  else
+    RELEASE_BASE_URL="$DINO_REPO/releases/download/v$DINO_VERSION"
+    WHEEL_URL="$RELEASE_BASE_URL/ai_dino_in_terminal-${DINO_VERSION}-py3-none-any.whl"
+  fi
+  WHEEL_NAME="ai_dino_in_terminal-${DINO_VERSION}-py3-none-any.whl"
   WHEEL_PATH="$TMP_DIR/$WHEEL_NAME"
-  RELEASE_BASE_URL="$DINO_REPO/releases/download/v$DINO_VERSION"
-  WHEEL_URL="$RELEASE_BASE_URL/$WHEEL_NAME"
   log "Downloading $WHEEL_URL"
   download "$WHEEL_URL" "$WHEEL_PATH"
 else
