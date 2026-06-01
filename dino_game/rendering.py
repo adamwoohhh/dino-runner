@@ -1,5 +1,7 @@
 """Curses rendering for the terminal dino game."""
 
+from __future__ import annotations
+
 import curses
 import time
 

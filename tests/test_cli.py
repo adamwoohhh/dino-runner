@@ -131,9 +131,12 @@ class CliContractTest(unittest.TestCase):
 
     def test_version_flags_return_project_version(self):
         dino_game = self.dino_game()
+        pyproject = tomllib.loads((pathlib.Path(__file__).resolve().parents[1] / "pyproject.toml").read_text())
+        expected_version = pyproject["project"]["version"]
 
-        self.assertEqual(dino_game.parse_cli_args(["--version"]).version, "0.1.0")
-        self.assertEqual(dino_game.parse_cli_args(["play", "-V"]).version, "0.1.0")
+        self.assertEqual(dino_game.VERSION, expected_version)
+        self.assertEqual(dino_game.parse_cli_args(["--version"]).version, expected_version)
+        self.assertEqual(dino_game.parse_cli_args(["play", "-V"]).version, expected_version)
 
     def test_setup_keyboard_interrupt_exits_without_traceback(self):
         dino_game = self.dino_game()

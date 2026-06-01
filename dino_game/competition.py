@@ -1,5 +1,7 @@
 """Competition-mode domain logic and loop."""
 
+from __future__ import annotations
+
 import os
 import random
 import time

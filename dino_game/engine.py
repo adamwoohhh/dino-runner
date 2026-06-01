@@ -1,5 +1,7 @@
 """Core game engine, physics, obstacles, and actions."""
 
+from __future__ import annotations
+
 import random
 
 from .art import CACTUS_PLANT_ART, OBSTACLE_ART, celestial_art_width

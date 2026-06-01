@@ -1,6 +1,6 @@
 .PHONY: venv install dev-install test check build check-dist publish-test publish run compete auto llm clean
 
-SYSTEM_PYTHON ?= python3
+SYSTEM_PYTHON ?= python3.13
 VENV ?= .venv
 PYTHON := $(VENV)/bin/python
 PIP := $(PYTHON) -m pip
@@ -21,18 +21,18 @@ test: venv
 check: test
 	env PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m compileall dino_game
 
-build:
+build: dev-install
 	rm -rf dist
-	$(SYSTEM_PYTHON) -m build
+	$(PYTHON) -m build
 
 check-dist: build
-	$(SYSTEM_PYTHON) -m twine check dist/*
+	$(PYTHON) -m twine check dist/*
 
 publish-test: check-dist
-	$(SYSTEM_PYTHON) -m twine upload --repository testpypi dist/*
+	$(PYTHON) -m twine upload --repository testpypi dist/*
 
 publish: check-dist
-	$(SYSTEM_PYTHON) -m twine upload dist/*
+	$(PYTHON) -m twine upload dist/*
 
 run:
 	$(DINO)

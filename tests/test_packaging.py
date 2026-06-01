@@ -40,8 +40,9 @@ class PackagingTest(unittest.TestCase):
     def test_makefile_publish_targets_build_and_check_fresh_artifacts(self):
         makefile = (self.project_root() / "Makefile").read_text()
 
-        self.assertIn("build:\n\trm -rf dist\n\t$(SYSTEM_PYTHON) -m build", makefile)
-        self.assertIn("check-dist: build\n\t$(SYSTEM_PYTHON) -m twine check dist/*", makefile)
+        self.assertIn("SYSTEM_PYTHON ?= python3.13", makefile)
+        self.assertIn("build: dev-install\n\trm -rf dist\n\t$(PYTHON) -m build", makefile)
+        self.assertIn("check-dist: build\n\t$(PYTHON) -m twine check dist/*", makefile)
         self.assertIn("publish-test: check-dist", makefile)
         self.assertIn("publish: check-dist", makefile)
 

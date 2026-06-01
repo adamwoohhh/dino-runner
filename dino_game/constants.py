@@ -124,7 +124,7 @@ def replay_dir_path(home: str | None = None) -> str:
 
 REPLAY_DIR = replay_dir_path()
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 PAUSE_COUNTDOWN_SECONDS = 3
 

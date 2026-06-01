@@ -8,6 +8,14 @@ import unittest
 from unittest import mock
 
 
+class EngineImportTest(unittest.TestCase):
+    def test_engine_exports_game_and_action_helper(self):
+        engine = importlib.import_module("dino_game.engine")
+
+        self.assertTrue(callable(engine.DinoGame))
+        self.assertTrue(callable(engine.apply_game_action))
+
+
 class GameTuningTest(unittest.TestCase):
     def test_jump_arc_returns_to_ground_in_chrome_like_window(self):
         dino_game = importlib.import_module("dino_game")
