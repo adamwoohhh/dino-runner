@@ -18,6 +18,42 @@ pip install ai-dino-in-terminal
 dino
 ```
 
+如果不想依赖 `pipx` 或 PyPI，可以用 `install.sh` 从 GitHub Release 下载 wheel，
+安装到独立虚拟环境后把 `dino` 链接到 `~/.local/bin`：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/adamwoohhh/agents-competition/main/install.sh | bash
+```
+
+默认使用 GitHub Release：
+
+```bash
+DINO_INSTALL_SOURCE=github DINO_VERSION=0.1.1 bash install.sh
+```
+
+也可以安装本地下载好的 wheel，不访问 PyPI：
+
+```bash
+DINO_WHEEL_PATH=dist/ai_dino_in_terminal-0.1.1-py3-none-any.whl bash install.sh
+```
+
+卸载：
+
+```bash
+bash install.sh --uninstall
+```
+
+## 发布 GitHub Release
+
+GitHub Actions 会在推送 `v*` tag 时自动构建发布包，校验 `dist/*.whl` 和
+`dist/*.tar.gz`，并把它们上传到 GitHub Release。tag 版本必须和
+`pyproject.toml` 中的版本一致：
+
+```bash
+git tag v0.1.1
+git push origin v0.1.1
+```
+
 ## 快速开玩
 
 ### 手动玩
