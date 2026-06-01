@@ -69,6 +69,18 @@ class PackagingTest(unittest.TestCase):
         self.assertIn("dist/*.tar.gz", workflow)
         self.assertNotIn("twine upload", workflow)
 
+    def test_github_actions_release_workflow_has_no_accidental_top_level_script_lines(self):
+        workflow = (self.project_root() / ".github" / "workflows" / "release.yml").read_text()
+        allowed_top_level_prefixes = ("name:", "on:", "permissions:", "jobs:")
+
+        for line_number, line in enumerate(workflow.splitlines(), start=1):
+            if not line or line.startswith(" "):
+                continue
+            self.assertTrue(
+                line.startswith(allowed_top_level_prefixes),
+                f"unexpected top-level workflow line {line_number}: {line}",
+            )
+
     def test_install_script_installs_release_wheel_without_pypi_or_pipx(self):
         install_script = (self.project_root() / "install.sh").read_text()
         pyproject = self.load_pyproject()
