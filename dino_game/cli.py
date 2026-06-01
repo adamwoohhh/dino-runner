@@ -4,7 +4,6 @@ import curses
 import sys
 import types
 from dataclasses import dataclass
-from importlib import metadata
 
 from .constants import VERSION
 from .llm import (
@@ -67,11 +66,8 @@ HELP_FLAGS = {"--help", "-H"}
 VERSION_FLAGS = {"--version", "-V"}
 
 def tool_version() -> str:
-    """返回安装包版本；源码运行时回退到本文件常量。"""
-    try:
-        return metadata.version("ai-dino-in-terminal")
-    except metadata.PackageNotFoundError:
-        return VERSION
+    """返回命令行工具版本。"""
+    return VERSION
 
 def render_main_help() -> str:
     """渲染总 help，只展示子命令和公共参数。"""

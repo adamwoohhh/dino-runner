@@ -3,6 +3,9 @@
 import json
 import math
 import os
+import tomllib
+from importlib import metadata
+from pathlib import Path
 
 FPS = 30                  # 帧率，决定游戏流畅度 (30帧 = 每帧33ms)
 
@@ -124,7 +127,33 @@ def replay_dir_path(home: str | None = None) -> str:
 
 REPLAY_DIR = replay_dir_path()
 
-VERSION = "0.1.1"
+
+def _version_from_pyproject(path: Path | None = None) -> str | None:
+    pyproject_path = path or Path(__file__).resolve().parents[1] / "pyproject.toml"
+    try:
+        with open(pyproject_path, "rb") as f:
+            data = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    project = data.get("project")
+    if not isinstance(project, dict):
+        return None
+    version = project.get("version")
+    return version if isinstance(version, str) and version else None
+
+
+def _installed_package_version() -> str:
+    try:
+        return metadata.version("ai-dino-in-terminal")
+    except metadata.PackageNotFoundError:
+        return "0.0.0"
+
+
+def _project_version() -> str:
+    return _version_from_pyproject() or _installed_package_version()
+
+
+VERSION = _project_version()
 
 PAUSE_COUNTDOWN_SECONDS = 3
 

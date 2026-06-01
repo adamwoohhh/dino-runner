@@ -2,6 +2,7 @@ import importlib
 import json
 import os
 import pathlib
+import re
 import tempfile
 import tomllib
 import unittest
@@ -137,6 +138,30 @@ class CliContractTest(unittest.TestCase):
         self.assertEqual(dino_game.VERSION, expected_version)
         self.assertEqual(dino_game.parse_cli_args(["--version"]).version, expected_version)
         self.assertEqual(dino_game.parse_cli_args(["play", "-V"]).version, expected_version)
+
+    def test_constants_do_not_hardcode_project_version(self):
+        constants_source = (
+            pathlib.Path(__file__).resolve().parents[1]
+            / "dino_game"
+            / "constants.py"
+        ).read_text()
+
+        self.assertIsNone(re.search(r"^VERSION\s*=\s*['\"]\d", constants_source, re.MULTILINE))
+
+    def test_version_helper_reads_pyproject_version(self):
+        constants = importlib.import_module("dino_game.constants")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pyproject_path = pathlib.Path(temp_dir) / "pyproject.toml"
+            pyproject_path.write_text('[project]\nversion = "9.8.7"\n')
+
+            self.assertEqual(constants._version_from_pyproject(pyproject_path), "9.8.7")
+
+    def test_project_version_falls_back_to_installed_metadata(self):
+        constants = importlib.import_module("dino_game.constants")
+
+        with mock.patch("dino_game.constants._version_from_pyproject", return_value=None), \
+                mock.patch("dino_game.constants.metadata.version", return_value="7.6.5"):
+            self.assertEqual(constants._project_version(), "7.6.5")
 
     def test_setup_keyboard_interrupt_exits_without_traceback(self):
         dino_game = self.dino_game()

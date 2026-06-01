@@ -4,21 +4,14 @@
 
 ## 安装
 
-推荐用 `pipx` 安装，这样会把命令行工具放在独立环境里：
+推荐用 `pipx` 安装：
 
 ```bash
 pipx install ai-dino-in-terminal
 dino
 ```
 
-也可以用 `pip` 安装：
-
-```bash
-pip install ai-dino-in-terminal
-dino
-```
-
-如果本地没有 pipx，可以从 GitHub latest release 下载 wheel 并安装：
+如果本地没有 pipx，可以从 GitHub latest release 的 GitHub Release 下载并安装：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/adamwoohhh/agents-competition/main/install.sh | bash

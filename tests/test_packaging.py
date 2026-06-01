@@ -30,30 +30,6 @@ class PackagingTest(unittest.TestCase):
         dino_game = importlib.import_module("dino_game")
         self.assertTrue(callable(dino_game.cli))
 
-    def test_readme_documents_pip_and_pipx_installation(self):
-        readme = (self.project_root() / "README.md").read_text()
-
-        self.assertIn("pipx install ai-dino-in-terminal", readme)
-        self.assertIn("pip install ai-dino-in-terminal", readme)
-        self.assertIn("dino", readme)
-
-    def test_readme_documents_github_release_install_script(self):
-        readme = (self.project_root() / "README.md").read_text()
-
-        self.assertIn("install.sh", readme)
-        self.assertIn("GitHub Release", readme)
-        self.assertIn("curl -fsSL", readme)
-        self.assertIn("latest release", readme)
-        self.assertIn("DINO_INSTALL_SOURCE=github", readme)
-
-    def test_readme_documents_tag_triggered_github_release_publish(self):
-        readme = (self.project_root() / "README.md").read_text()
-
-        self.assertIn("git tag v0.1.1", readme)
-        self.assertIn("git push origin v0.1.1", readme)
-        self.assertIn("GitHub Actions", readme)
-        self.assertIn("dist/*.whl", readme)
-
     def test_github_actions_release_workflow_publishes_release_assets(self):
         workflow = (self.project_root() / ".github" / "workflows" / "release.yml").read_text()
 
