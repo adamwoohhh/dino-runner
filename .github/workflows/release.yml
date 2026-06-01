@@ -1,6 +1,7 @@
 name: Release
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - 'v*'
@@ -29,8 +30,12 @@ jobs:
 
       - name: Verify tag matches project version
         run: |
-          tag_version="${GITHUB_REF_NAME#v}"
           pyproject_version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            tag_version="${GITHUB_REF_NAME#v}"
+          else
+            tag_version="$pyproject_version"
+          fi
           if [ "$tag_version" != "$pyproject_version" ]; then
             echo "tag_version=$tag_version does not match pyproject_version=$pyproject_version" >&2
             exit 1

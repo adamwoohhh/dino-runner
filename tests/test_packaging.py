@@ -56,6 +56,7 @@ class PackagingTest(unittest.TestCase):
     def test_github_actions_release_workflow_publishes_release_assets(self):
         workflow = (self.project_root() / ".github" / "workflows" / "release.yml").read_text()
 
+        self.assertIn("workflow_dispatch:", workflow)
         self.assertIn("tags:", workflow)
         self.assertIn("'v*'", workflow)
         self.assertIn("python-version: '3.13'", workflow)
